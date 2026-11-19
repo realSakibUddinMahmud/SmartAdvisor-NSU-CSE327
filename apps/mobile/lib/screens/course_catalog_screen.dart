@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
-import '../state/app_state.dart';
 import '../models/models.dart';
+import '../state/app_state.dart';
+import '../theme/app_theme.dart';
 import '../widgets/bottom_sheets.dart';
 import 'course_detail_screen.dart';
 
@@ -15,119 +15,33 @@ class CourseCatalogScreen extends StatefulWidget {
 }
 
 class _CourseCatalogScreenState extends State<CourseCatalogScreen> {
-  String _selectedFilter = 'All (48)';
+  String _selectedFilterKey = 'all';
   String _searchQuery = '';
 
-  final List<CourseItem> _allCourses = [
-    const CourseItem(
-      code: 'CSE 327',
-      title: 'Software Engineering',
-      credits: 3.0,
-      department: 'ECE / CSE',
-      statusAction: 'Choose Section (4 Avail)',
-      sections: [
-        CourseSection(
-          id: 'CSE327-01',
-          courseCode: 'CSE 327',
-          sectionNumber: '01',
-          faculty: 'Dr. Nabeel Mohammed',
-          days: 'ST',
-          timeSlot: '11:20 AM - 12:50 PM',
-          room: 'SAC 502',
-          capacity: 40,
-          enrolled: 28,
-          badge: 'Recommended',
-        ),
-      ],
-    ),
-    const CourseItem(
-      code: 'CSE 311',
-      title: 'Database Systems',
-      credits: 3.0,
-      department: 'ECE / CSE',
-      statusAction: 'Fast-Track Add Section',
-      sections: [
-        CourseSection(
-          id: 'CSE311-03',
-          courseCode: 'CSE 311',
-          sectionNumber: '03',
-          faculty: 'Dr. Tanjila Farah',
-          days: 'MW',
-          timeSlot: '09:40 AM - 11:10 AM',
-          room: 'NAC 408',
-          capacity: 40,
-          enrolled: 37,
-        ),
-      ],
-    ),
-    const CourseItem(
-      code: 'CSE 331',
-      title: 'Microprocessor Systems',
-      credits: 3.0,
-      department: 'ECE / CSE',
-      statusAction: 'Join Waitlist & Auto-Alert',
-      sections: [
-        CourseSection(
-          id: 'CSE331-01',
-          courseCode: 'CSE 331',
-          sectionNumber: '01',
-          faculty: 'Prof. Dr. Rajesh Palit',
-          days: 'MW',
-          timeSlot: '01:20 PM - 02:50 PM',
-          room: 'SAC 415',
-          capacity: 40,
-          enrolled: 35,
-        ),
-      ],
-    ),
-    const CourseItem(
-      code: 'CSE 425',
-      title: 'Concepts of Programming Languages',
-      credits: 3.0,
-      department: 'ECE / CSE',
-      isPrereqBlocked: true,
-      prereqNote: '100+ Credits Required (You have 96 Cr)',
-      statusAction: 'Prerequisites Not Met',
-      sections: [
-        CourseSection(
-          id: 'CSE425-01',
-          courseCode: 'CSE 425',
-          sectionNumber: '01',
-          faculty: 'Dr. Nova Ahmed',
-          days: 'MW',
-          timeSlot: '02:40 PM - 04:10 PM',
-          room: 'LIB 602',
-          capacity: 40,
-          enrolled: 40,
-        ),
-      ],
-    ),
-    const CourseItem(
-      code: 'MAT 361',
-      title: 'Probability & Statistics',
-      credits: 3.0,
-      department: 'Math & Physics',
-      statusAction: 'Fast-Track Add Section',
-      sections: [
-        CourseSection(
-          id: 'MAT361-04',
-          courseCode: 'MAT 361',
-          sectionNumber: '04',
-          faculty: 'Dr. Hasina Akter',
-          days: 'ST',
-          timeSlot: '01:20 PM - 02:50 PM',
-          room: 'NAC 510',
-          capacity: 40,
-          enrolled: 18,
-        ),
-      ],
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    widget.appState.addListener(_onStateChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.appState.removeListener(_onStateChanged);
+    super.dispose();
+  }
+
+  void _onStateChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _allCourses.where((course) {
-      if (_selectedFilter == 'Eligible for me' && course.isPrereqBlocked) {
+    final allCourses = widget.appState.catalogCourses;
+    final filtered = allCourses.where((course) {
+      if (_selectedFilterKey == 'eligible' && course.isPrereqBlocked) {
+        return false;
+      }
+      if (_selectedFilterKey == 'available' && !course.hasAvailableSeats) {
         return false;
       }
       if (_searchQuery.isNotEmpty) {
@@ -137,6 +51,12 @@ class _CourseCatalogScreenState extends State<CourseCatalogScreen> {
       }
       return true;
     }).toList();
+
+    final filters = [
+      (key: 'all', label: 'All (${allCourses.length})'),
+      (key: 'eligible', label: 'Eligible for me'),
+      (key: 'available', label: 'Available Seats'),
+    ];
 
     return Scaffold(
       appBar: AppBar(
@@ -155,16 +75,25 @@ class _CourseCatalogScreenState extends State<CourseCatalogScreen> {
             color: Colors.white,
             child: Column(
               children: [
-                // Search Input
                 TextField(
                   onChanged: (val) => setState(() => _searchQuery = val),
                   decoration: InputDecoration(
                     hintText: 'Search course code or title (e.g. CSE 327)...',
-                    hintStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
-                    prefixIcon: const Icon(Icons.search, size: 20, color: AppTheme.textMuted),
+                    hintStyle: const TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.textMuted,
+                    ),
+                    prefixIcon: const Icon(
+                      Icons.search,
+                      size: 20,
+                      color: AppTheme.textMuted,
+                    ),
                     filled: true,
                     fillColor: AppTheme.canvas,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
                       borderSide: const BorderSide(color: AppTheme.border),
@@ -181,25 +110,31 @@ class _CourseCatalogScreenState extends State<CourseCatalogScreen> {
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(
-                    children: ['All (48)', 'Eligible for me', 'Available Seats'].map((filter) {
-                      final isSelected = _selectedFilter == filter;
+                    children: filters.map((f) {
+                      final isSelected = _selectedFilterKey == f.key;
                       return Padding(
                         padding: const EdgeInsets.only(right: 8),
                         child: ChoiceChip(
-                          label: Text(filter),
+                          label: Text(f.label),
                           labelStyle: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
-                            color: isSelected ? Colors.white : AppTheme.textSecondary,
+                            color: isSelected
+                                ? Colors.white
+                                : AppTheme.textSecondary,
                           ),
                           selected: isSelected,
                           selectedColor: AppTheme.navy,
                           backgroundColor: AppTheme.canvas,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(20),
-                            side: BorderSide(color: isSelected ? AppTheme.navy : AppTheme.border),
+                            side: BorderSide(
+                              color:
+                                  isSelected ? AppTheme.navy : AppTheme.border,
+                            ),
                           ),
-                          onSelected: (_) => setState(() => _selectedFilter = filter),
+                          onSelected: (_) =>
+                              setState(() => _selectedFilterKey = f.key),
                         ),
                       );
                     }).toList(),
@@ -212,15 +147,24 @@ class _CourseCatalogScreenState extends State<CourseCatalogScreen> {
 
           // Course Cards List
           Expanded(
-            child: ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: filtered.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (ctx, index) {
-                final course = filtered[index];
-                return _buildCourseCard(course);
-              },
-            ),
+            child: filtered.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No matching courses found.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppTheme.textMuted,
+                      ),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (ctx, index) {
+                      return _buildCourseCard(filtered[index]);
+                    },
+                  ),
           ),
 
           // Floating Bottom Cart Bar
@@ -248,11 +192,19 @@ class _CourseCatalogScreenState extends State<CourseCatalogScreen> {
                       children: [
                         const Text(
                           'ADVISING CART',
-                          style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                         Text(
-                          '${widget.appState.totalCredits.toStringAsFixed(1)} / 15.0 Cr (${widget.appState.stagedCourses.length} Staged)',
-                          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                          '${widget.appState.totalCredits.toStringAsFixed(1)} / ${widget.appState.maxCredits.toStringAsFixed(1)} Cr (${widget.appState.stagedCourses.length} Staged)',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -263,18 +215,26 @@ class _CourseCatalogScreenState extends State<CourseCatalogScreen> {
                   ElevatedButton(
                     onPressed: () {
                       Navigator.pop(context);
-                      widget.appState.setTab(1); // Go to Schedule Tab
+                      widget.appState.setTab(1);
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.teal,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 10,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
                       elevation: 0,
                     ),
                     child: const Text(
                       'Review Cart →',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                 ],
@@ -287,135 +247,239 @@ class _CourseCatalogScreenState extends State<CourseCatalogScreen> {
   }
 
   Widget _buildCourseCard(CourseItem course) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Text(
-                  course.code,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.navy,
+    final firstSec = course.sections.first;
+    final hasMultiSections = course.sections.length > 1;
+
+    return InkWell(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CourseDetailScreen(
+              appState: widget.appState,
+              courseCode: course.code,
+            ),
+          ),
+        );
+      },
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    course.code,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.navy,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.canvasAlt,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '${course.credits.toStringAsFixed(1)} Cr',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.navy,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              course.title,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppTheme.textSecondary,
               ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: AppTheme.canvasAlt,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  '${course.credits.toStringAsFixed(1)} Cr',
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.navy),
+            ),
+            if (course.prereqNote.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                course.prereqNote,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppTheme.amberDark,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 4),
+            const SizedBox(height: 12),
 
-          Text(
-            course.title,
-            style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
-          ),
-          const SizedBox(height: 12),
-
-          // Action Button based on course type
-          if (course.code == 'CSE 327')
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => CourseDetailScreen(appState: widget.appState),
+            if (course.isPrereqBlocked)
+              Builder(
+                builder: (context) {
+                  final hasApprovedCreditWaiver = widget.appState.exceptions.any(
+                    (ex) =>
+                        ex.status == PetitionStatus.approved &&
+                        ex.studentId == widget.appState.studentId &&
+                        DayCodeHelper.normalizeCourseCode(ex.courseCode) ==
+                            DayCodeHelper.normalizeCourseCode(course.code) &&
+                        (ex.category == 'Credit Standing' ||
+                            ex.ruleCode == 'RULE-4.2'),
+                  );
+                  final isCreditFloorBlocked =
+                      firstSec.minCreditsRequired != null &&
+                          widget.appState.completedCredits <
+                              firstSec.minCreditsRequired! &&
+                          !hasApprovedCreditWaiver;
+                  final blockedRuleCode =
+                      isCreditFloorBlocked ? 'RULE-4.2' : 'RULE-2.1';
+                  return SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        MobileBottomSheets.showMissingPrereqRule42(
+                          context,
+                          targetCourse: course.code,
+                          sectionId: firstSec.id,
+                          ruleCode: blockedRuleCode,
+                          studentCredits: widget.appState.completedCredits,
+                          requiredCredits: firstSec.minCreditsRequired,
+                          missingPrerequisites: isCreditFloorBlocked
+                              ? const <String>[]
+                              : course.missingPrerequisites,
+                          appState: widget.appState,
+                        );
+                      },
+                      icon: const Icon(Icons.lock_outline, size: 16),
+                      label: Text(
+                        isCreditFloorBlocked
+                            ? 'Prerequisites Not Met (Rule 4.2)'
+                            : 'Prerequisites Not Met (Rule 2.1)',
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.amberLight,
+                        foregroundColor: AppTheme.amberDark,
+                        elevation: 0,
+                        side: BorderSide(color: AppTheme.amber.withOpacity(0.3)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
                     ),
                   );
                 },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.teal,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  elevation: 0,
-                ),
-                child: const Text('Choose Section (4 Avail) →', style: TextStyle(fontWeight: FontWeight.bold)),
-              ),
-            )
-          else if (course.isPrereqBlocked)
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  MobileBottomSheets.showMissingPrereqRule42(
-                    context,
-                    targetCourse: course.code,
-                    appState: widget.appState,
-                  );
-                },
-                icon: const Icon(Icons.lock_outline, size: 16),
-                label: const Text('Prerequisites Not Met (Rule 4.2)'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.amberLight,
-                  foregroundColor: AppTheme.amberDark,
-                  elevation: 0,
-                  side: BorderSide(color: AppTheme.amber.withOpacity(0.3)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-              ),
-            )
-          else
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: () {
-                  final messenger = ScaffoldMessenger.maybeOf(context);
-                  final sec = course.sections.first;
-                  widget.appState.addStagedCourse(
-                    StagedCourse(
-                      courseCode: sec.courseCode,
-                      sectionNumber: sec.sectionNumber,
-                      faculty: sec.faculty,
-                      timeSlot: sec.timeSlot,
-                      days: sec.days,
-                      room: sec.room,
-                      credits: course.credits,
+              )
+            else if (hasMultiSections)
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => CourseDetailScreen(
+                          appState: widget.appState,
+                          courseCode: course.code,
+                        ),
+                      ),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.teal,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                  );
-                  messenger?.showSnackBar(
-                    SnackBar(
-                      content: Text('${sec.courseCode} Sec ${sec.sectionNumber} staged!'),
-                      backgroundColor: AppTheme.emeraldDark,
-                    ),
-                  );
-                },
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: AppTheme.border),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    elevation: 0,
+                  ),
+                  child: Text(
+                    '${course.statusAction} →',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
                 ),
-                child: Text(
-                  course.statusAction,
-                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppTheme.navy),
+              )
+            else
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.maybeOf(context);
+                    final res = await widget.appState.stageSection(firstSec.id);
+                    if (!mounted) return;
+                    if (res.isStaged) {
+                      messenger?.showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            '${firstSec.courseCode} Sec ${firstSec.sectionNumber} staged!',
+                          ),
+                          backgroundColor: AppTheme.emeraldDark,
+                        ),
+                      );
+                    } else if (res.kind == StageResultKind.ruleAlert) {
+                      MobileBottomSheets.showMissingPrereqRule42(
+                        context,
+                        targetCourse: firstSec.courseCode,
+                        sectionId: firstSec.id,
+                        ruleCode: res.ruleCode ?? 'RULE-4.2',
+                        studentCredits: res.studentCredits,
+                        requiredCredits: res.requiredCredits,
+                        missingPrerequisites: res.missingPrerequisites,
+                        conflictingSections: res.conflictingSections,
+                        appState: widget.appState,
+                      );
+                    } else if (res.kind == StageResultKind.sectionFull) {
+                      MobileBottomSheets.showSectionFullFallback(
+                        context,
+                        courseCode: firstSec.courseCode,
+                        fullSection: firstSec.sectionNumber,
+                        fullSectionObj: res.fullSection ?? firstSec,
+                        alternatives: res.alternatives,
+                        appState: widget.appState,
+                      );
+                    } else if (res.message != null) {
+                      messenger?.showSnackBar(
+                        SnackBar(
+                          content: Text(res.message!),
+                          backgroundColor: AppTheme.crimson,
+                        ),
+                      );
+                    }
+                  },
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: AppTheme.border),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: Text(
+                    course.statusAction,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.navy,
+                    ),
+                  ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }

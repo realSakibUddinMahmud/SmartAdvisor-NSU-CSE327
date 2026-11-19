@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import {
   StudentProfile,
   CourseSection,
@@ -5,8 +6,261 @@ import {
   BypassRule,
   AuditLogItem,
   AdminMetrics,
-  EscalationItem
+  EscalationItem,
+  UserRole,
+  NotificationItem,
+  WaitlistEntry
 } from './types';
+
+// ================= PASSWORD HASHING (SCRYPT) =================
+
+export const DEMO_DEFAULT_PASSWORD = process.env.DEMO_DEFAULT_PASSWORD || 'SmartAdvisor2025!';
+
+export function hashPassword(plain: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(plain, salt, 64).toString('hex');
+  return `scrypt:${salt}:${derived}`;
+}
+
+export function verifyPassword(plain: string, stored: string): boolean {
+  const parts = stored.split(':');
+  if (parts.length !== 3 || parts[0] !== 'scrypt') {
+    return false;
+  }
+  const [, salt, expectedHex] = parts;
+  if (!salt || !expectedHex) {
+    return false;
+  }
+  try {
+    const derived = crypto.scryptSync(plain, salt, 64);
+    const expected = Buffer.from(expectedHex, 'hex');
+    if (derived.length !== expected.length) {
+      return false;
+    }
+    return crypto.timingSafeEqual(derived, expected);
+  } catch {
+    return false;
+  }
+}
+
+// ================= ROOM FIRE-CODE CAPS & DAG CATALOG =================
+
+export const ROOM_FIRE_CODE_CAPS: Record<string, number> = {
+  'LIB 602': 55,
+  'SAC 502': 55,
+  'SAC 415': 55,
+  'NAC 408': 50,
+  'NAC 510': 50,
+  'LIB 608': 45
+};
+
+export interface CatalogCourseNode {
+  code: string;
+  title: string;
+  credits: number;
+  department: CourseSection['department'];
+  prerequisites: string[];
+  minCreditsRequired?: number;
+}
+
+export const COURSE_CATALOG_DAG: CatalogCourseNode[] = [
+  {
+    code: 'CSE 115',
+    title: 'Programming Language I',
+    credits: 3.0,
+    department: 'ECE / CSE',
+    prerequisites: []
+  },
+  {
+    code: 'MAT 120',
+    title: 'Calculus and Analytic Geometry I',
+    credits: 3.0,
+    department: 'Math & Physics',
+    prerequisites: []
+  },
+  {
+    code: 'CSE 215',
+    title: 'Programming Language II',
+    credits: 3.0,
+    department: 'ECE / CSE',
+    prerequisites: ['CSE 115']
+  },
+  {
+    code: 'CSE 231',
+    title: 'Digital Logic Design',
+    credits: 3.0,
+    department: 'ECE / CSE',
+    prerequisites: ['CSE 115']
+  },
+  {
+    code: 'CSE 311',
+    title: 'Database Systems',
+    credits: 3.0,
+    department: 'ECE / CSE',
+    prerequisites: ['CSE 215']
+  },
+  {
+    code: 'CSE 311L',
+    title: 'Database Lab',
+    credits: 1.0,
+    department: 'ECE / CSE',
+    prerequisites: ['CSE 215']
+  },
+  {
+    code: 'CSE 327',
+    title: 'Software Engineering',
+    credits: 3.0,
+    department: 'ECE / CSE',
+    prerequisites: ['CSE 215']
+  },
+  {
+    code: 'CSE 331',
+    title: 'Microprocessor Systems',
+    credits: 3.0,
+    department: 'ECE / CSE',
+    prerequisites: ['CSE 231']
+  },
+  {
+    code: 'MAT 361',
+    title: 'Probability & Statistics',
+    credits: 3.0,
+    department: 'Math & Physics',
+    prerequisites: ['MAT 120']
+  },
+  {
+    code: 'CSE 425',
+    title: 'Concepts of Programming Languages',
+    credits: 3.0,
+    department: 'ECE / CSE',
+    prerequisites: ['CSE 215', 'CSE 311'],
+    minCreditsRequired: 100
+  }
+];
+
+// ================= AUTH & RBAC SEED ACCOUNTS =================
+
+export interface SeedUserAccount {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  passwordHash: string;
+  instructorName: string | null;
+  department: string;
+}
+
+const DEFAULT_HASH = hashPassword(DEMO_DEFAULT_PASSWORD);
+
+export const INITIAL_USERS: SeedUserAccount[] = [
+  {
+    id: '2412159042',
+    name: 'Rahim Ahmed',
+    email: 'rahim.ahmed01@northsouth.edu',
+    role: 'student',
+    passwordHash: DEFAULT_HASH,
+    instructorName: null,
+    department: 'ECE / CSE'
+  },
+  {
+    id: '2321450042',
+    name: 'Fariha Tasnim',
+    email: 'fariha.tasnim@northsouth.edu',
+    role: 'student',
+    passwordHash: DEFAULT_HASH,
+    instructorName: null,
+    department: 'ECE / CSE'
+  },
+  {
+    id: '2211290042',
+    name: 'Tanveer Hasan',
+    email: 'tanveer.hasan@northsouth.edu',
+    role: 'student',
+    passwordHash: DEFAULT_HASH,
+    instructorName: null,
+    department: 'ECE / CSE'
+  },
+  {
+    id: 'nova.ahmed',
+    name: 'Dr. Nova Ahmed',
+    email: 'nova.ahmed@northsouth.edu',
+    role: 'faculty',
+    passwordHash: DEFAULT_HASH,
+    instructorName: 'Dr. Nova Ahmed',
+    department: 'ECE / CSE'
+  },
+  {
+    id: 'nabeel.mohammed',
+    name: 'Dr. Nabeel Mohammed',
+    email: 'nabeel.mohammed@northsouth.edu',
+    role: 'faculty',
+    passwordHash: DEFAULT_HASH,
+    instructorName: 'Dr. Nabeel Mohammed',
+    department: 'ECE / CSE'
+  },
+  {
+    id: 'silvia.ahmed',
+    name: 'Dr. Silvia Ahmed',
+    email: 'silvia.ahmed@northsouth.edu',
+    role: 'faculty',
+    passwordHash: DEFAULT_HASH,
+    instructorName: 'Dr. Silvia Ahmed',
+    department: 'ECE / CSE'
+  },
+  {
+    id: 'rajesh.palit',
+    name: 'Prof. Dr. Rajesh Palit',
+    email: 'rajesh.palit@northsouth.edu',
+    role: 'faculty',
+    passwordHash: DEFAULT_HASH,
+    instructorName: 'Prof. Dr. Rajesh Palit',
+    department: 'ECE / CSE'
+  },
+  {
+    id: 'tanvir.rahman',
+    name: 'Mr. Tanvir Rahman',
+    email: 'tanvir.rahman@northsouth.edu',
+    role: 'faculty',
+    passwordHash: DEFAULT_HASH,
+    instructorName: 'Mr. Tanvir Rahman',
+    department: 'ECE / CSE'
+  },
+  {
+    id: 'tanjila.farah',
+    name: 'Dr. Tanjila Farah',
+    email: 'tanjila.farah@northsouth.edu',
+    role: 'faculty',
+    passwordHash: DEFAULT_HASH,
+    instructorName: 'Dr. Tanjila Farah',
+    department: 'ECE / CSE'
+  },
+  {
+    id: 'safayat.hossain',
+    name: 'Mr. Safayat Hossain',
+    email: 'safayat.hossain@northsouth.edu',
+    role: 'faculty',
+    passwordHash: DEFAULT_HASH,
+    instructorName: 'Mr. Safayat Hossain',
+    department: 'ECE / CSE'
+  },
+  {
+    id: 'hasina.akter',
+    name: 'Dr. Hasina Akter',
+    email: 'hasina.akter@northsouth.edu',
+    role: 'faculty',
+    passwordHash: DEFAULT_HASH,
+    instructorName: 'Dr. Hasina Akter',
+    department: 'Math & Physics'
+  },
+  {
+    id: 'admin.itops',
+    name: 'IT Operations Admin',
+    email: 'itops@northsouth.edu',
+    role: 'admin',
+    passwordHash: DEFAULT_HASH,
+    instructorName: null,
+    department: 'IT Operations'
+  }
+];
 
 // ================= INITIAL PRE-SEEDED DATA =================
 
@@ -27,7 +281,8 @@ export const INITIAL_STUDENT: StudentProfile = {
     { code: 'CSE 231', grade: 'B+' }
   ],
   advisingClearedBy: 'Dr. Nova Ahmed',
-  slotClosesAt: new Date(Date.now() + 16094000).toISOString() // ~4h 28m
+  slotClosesAt: new Date(Date.now() + 16094000).toISOString(), // ~4h 28m
+  maxCredits: 15.0
 };
 
 export const INITIAL_SECTIONS: CourseSection[] = [
@@ -39,13 +294,16 @@ export const INITIAL_SECTIONS: CourseSection[] = [
     credits: 3.0,
     sectionNumber: '01',
     faculty: 'Dr. Nabeel Mohammed',
+    instructorId: 'nabeel.mohammed',
     days: 'ST',
     timeSlot: '11:20 AM - 12:50 PM',
     room: 'SAC 502',
+    roomCap: ROOM_FIRE_CODE_CAPS['SAC 502'],
     capacity: 40,
     enrolled: 28, // 12 available
     waitlisted: 0,
-    prerequisites: ['CSE 215']
+    prerequisites: ['CSE 215'],
+    examSlot: '2025-05-10T09:00:00Z'
   },
   {
     id: 'CSE327-02',
@@ -55,13 +313,16 @@ export const INITIAL_SECTIONS: CourseSection[] = [
     credits: 3.0,
     sectionNumber: '02',
     faculty: 'Dr. Silvia Ahmed',
+    instructorId: 'silvia.ahmed',
     days: 'MW',
     timeSlot: '09:40 AM - 11:10 AM',
     room: 'NAC 408',
+    roomCap: ROOM_FIRE_CODE_CAPS['NAC 408'],
     capacity: 40,
     enrolled: 36, // 04 available (Few Seats)
     waitlisted: 0,
-    prerequisites: ['CSE 215']
+    prerequisites: ['CSE 215'],
+    examSlot: '2025-05-10T09:00:00Z'
   },
   {
     id: 'CSE327-03',
@@ -71,13 +332,16 @@ export const INITIAL_SECTIONS: CourseSection[] = [
     credits: 3.0,
     sectionNumber: '03',
     faculty: 'Prof. Dr. Rajesh Palit',
+    instructorId: 'rajesh.palit',
     days: 'ST',
     timeSlot: '01:20 PM - 02:50 PM',
     room: 'SAC 415',
+    roomCap: ROOM_FIRE_CODE_CAPS['SAC 415'],
     capacity: 40,
     enrolled: 40, // 00 available (Full)
     waitlisted: 14,
-    prerequisites: ['CSE 215']
+    prerequisites: ['CSE 215'],
+    examSlot: '2025-05-10T09:00:00Z'
   },
   {
     id: 'CSE327-04',
@@ -87,13 +351,16 @@ export const INITIAL_SECTIONS: CourseSection[] = [
     credits: 3.0,
     sectionNumber: '04',
     faculty: 'Mr. Tanvir Rahman',
+    instructorId: 'tanvir.rahman',
     days: 'RA',
     timeSlot: '04:20 PM - 05:50 PM',
     room: 'LIB 602',
+    roomCap: ROOM_FIRE_CODE_CAPS['LIB 602'],
     capacity: 40,
     enrolled: 21, // 19 available
     waitlisted: 0,
-    prerequisites: ['CSE 215']
+    prerequisites: ['CSE 215'],
+    examSlot: '2025-05-10T09:00:00Z'
   },
   {
     id: 'CSE311-03',
@@ -103,13 +370,16 @@ export const INITIAL_SECTIONS: CourseSection[] = [
     credits: 3.0,
     sectionNumber: '03',
     faculty: 'Dr. Tanjila Farah',
+    instructorId: 'tanjila.farah',
     days: 'MW',
     timeSlot: '09:40 AM - 11:10 AM',
     room: 'NAC 408',
+    roomCap: ROOM_FIRE_CODE_CAPS['NAC 408'],
     capacity: 40,
     enrolled: 37, // 03 available (Few Seats Left)
     waitlisted: 0,
-    prerequisites: ['CSE 215']
+    prerequisites: ['CSE 215'],
+    examSlot: '2025-05-11T14:00:00Z'
   },
   {
     id: 'CSE311L-02',
@@ -119,14 +389,17 @@ export const INITIAL_SECTIONS: CourseSection[] = [
     credits: 1.0,
     sectionNumber: '02',
     faculty: 'Mr. Safayat Hossain',
+    instructorId: 'safayat.hossain',
     days: 'Thu',
     timeSlot: '09:40 AM - 12:40 PM',
     room: 'LIB 608',
+    roomCap: ROOM_FIRE_CODE_CAPS['LIB 608'],
     capacity: 35,
     enrolled: 27, // 08 available
     waitlisted: 0,
     prerequisites: ['CSE 215'],
-    isLab: true
+    isLab: true,
+    examSlot: '2025-05-13T09:00:00Z'
   },
   {
     id: 'MAT361-04',
@@ -136,13 +409,16 @@ export const INITIAL_SECTIONS: CourseSection[] = [
     credits: 3.0,
     sectionNumber: '04',
     faculty: 'Dr. Hasina Akter',
+    instructorId: 'hasina.akter',
     days: 'ST',
     timeSlot: '01:20 PM - 02:50 PM',
     room: 'NAC 510',
+    roomCap: ROOM_FIRE_CODE_CAPS['NAC 510'],
     capacity: 40,
     enrolled: 18, // 22 available
     waitlisted: 0,
-    prerequisites: ['MAT 120']
+    prerequisites: ['MAT 120'],
+    examSlot: '2025-05-14T09:00:00Z'
   },
   {
     id: 'CSE331-01',
@@ -152,13 +428,16 @@ export const INITIAL_SECTIONS: CourseSection[] = [
     credits: 3.0,
     sectionNumber: '01',
     faculty: 'Prof. Dr. Rajesh Palit',
+    instructorId: 'rajesh.palit',
     days: 'MW',
     timeSlot: '01:20 PM - 02:50 PM',
     room: 'SAC 415',
+    roomCap: ROOM_FIRE_CODE_CAPS['SAC 415'],
     capacity: 40,
     enrolled: 35, // 05 available
     waitlisted: 0,
-    prerequisites: ['CSE 231']
+    prerequisites: ['CSE 231'],
+    examSlot: '2025-05-10T14:00:00Z'
   },
   {
     id: 'CSE425-01',
@@ -168,14 +447,17 @@ export const INITIAL_SECTIONS: CourseSection[] = [
     credits: 3.0,
     sectionNumber: '01',
     faculty: 'Dr. Nova Ahmed',
+    instructorId: 'nova.ahmed',
     days: 'MW',
     timeSlot: '02:40 PM - 04:10 PM',
     room: 'LIB 602',
+    roomCap: ROOM_FIRE_CODE_CAPS['LIB 602'],
     capacity: 40,
     enrolled: 40, // 00 available (Full)
     waitlisted: 10,
     minCreditsRequired: 100,
-    prerequisites: ['CSE 215', 'CSE 311']
+    prerequisites: ['CSE 215', 'CSE 311'],
+    examSlot: '2025-05-10T19:00:00Z'
   }
 ];
 
@@ -183,7 +465,7 @@ export const INITIAL_STAGED_IDS: string[] = [
   'CSE327-01', // 3.0 Cr ST 11:20 AM
   'CSE311-03', // 3.0 Cr MW 09:40 AM
   'CSE311L-02', // 1.0 Cr Thu 09:40 AM
-  'MAT361-04'  // 3.0 Cr ST 01:20 PM
+  'MAT361-04' // 3.0 Cr ST 01:20 PM
   // Total: 10.0 Cr initial draft
 ];
 
@@ -199,6 +481,8 @@ export const INITIAL_EXCEPTIONS: ExceptionCase[] = [
     courseCode: 'CSE 425',
     courseTitle: 'Concepts of Programming Languages',
     sectionNumber: '01',
+    sectionId: 'CSE425-01',
+    ruleCode: 'RULE-4.2',
     category: 'Credit Standing',
     submittedAt: 'Today, 09:14 AM',
     status: 'pending',
@@ -254,6 +538,8 @@ export const INITIAL_EXCEPTIONS: ExceptionCase[] = [
     courseCode: 'CSE 327',
     courseTitle: 'Software Engineering',
     sectionNumber: '03',
+    sectionId: 'CSE327-03',
+    ruleCode: 'RULE-8.4',
     category: 'Capacity',
     submittedAt: 'Today, 08:42 AM',
     status: 'pending',
@@ -274,6 +560,8 @@ export const INITIAL_EXCEPTIONS: ExceptionCase[] = [
     courseCode: 'CSE 331',
     courseTitle: 'Microprocessor Systems',
     sectionNumber: '01',
+    sectionId: 'CSE331-01',
+    ruleCode: 'RULE-2.1',
     category: 'Prereqs',
     submittedAt: 'Today, 08:15 AM',
     status: 'pending',
@@ -408,5 +696,40 @@ export const INITIAL_ESCALATIONS: EscalationItem[] = [
       { major: 'B.Sc CSE (Graduating Senior)', count: 32, percentage: 84 },
       { major: 'B.Sc CSE (Junior)', count: 6, percentage: 16 }
     ]
+  }
+];
+
+export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
+  {
+    id: 'notif-seed-1',
+    studentId: '2412159042',
+    channel: 'IN_APP',
+    eventType: 'ENROLLMENT_CONFIRMED',
+    title: 'Phase 2 Advising Clearance Ready',
+    message: 'Dr. Nova Ahmed cleared your Phase 2 advising slot (#NSU-241215-9042).',
+    status: 'sent',
+    createdAt: new Date(Date.now() - 3600_000).toISOString(),
+    read: false
+  }
+];
+
+export const INITIAL_WAITLIST: WaitlistEntry[] = [
+  {
+    id: 'wl-seed-1',
+    studentId: '2321450042',
+    sectionId: 'CSE327-03',
+    courseCode: 'CSE 327',
+    position: 14,
+    createdAt: new Date(Date.now() - 7200_000).toISOString(),
+    status: 'waiting'
+  },
+  {
+    id: 'wl-seed-2',
+    studentId: '2211290042',
+    sectionId: 'CSE425-01',
+    courseCode: 'CSE 425',
+    position: 10,
+    createdAt: new Date(Date.now() - 5400_000).toISOString(),
+    status: 'waiting'
   }
 ];

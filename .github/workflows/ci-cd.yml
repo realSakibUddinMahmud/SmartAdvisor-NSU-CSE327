@@ -23,19 +23,21 @@ jobs:
             services/api/package-lock.json
             services/rds-worker/package-lock.json
 
-      - name: Test & Typecheck API Service
+      - name: Typecheck, Test & Build API Service
         working-directory: services/api
         run: |
           npm ci
           npm run typecheck
           npm test
+          npm run build
 
-      - name: Test & Typecheck RDS Worker
+      - name: Typecheck, Test & Build RDS Worker
         working-directory: services/rds-worker
         run: |
           npm ci
           npm run typecheck
           npm test
+          npm run build
 
   web-ci:
     name: Web App CI (Next.js)
@@ -54,6 +56,14 @@ jobs:
       - name: Install dependencies
         working-directory: apps/web
         run: npm ci
+
+      - name: Typecheck web application
+        working-directory: apps/web
+        run: npm run typecheck
+
+      - name: Run web unit tests
+        working-directory: apps/web
+        run: npm test
 
       - name: Lint web application
         working-directory: apps/web
@@ -89,7 +99,7 @@ jobs:
         run: flutter test
 
   docker-smoke-test:
-    name: Docker Smoke Test
+    name: Docker & NGINX Smoke Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -98,5 +108,94 @@ jobs:
       - name: Validate Docker Compose Configuration
         run: docker compose -f infrastructure/docker-compose.yml config
 
+      - name: Validate NGINX Configuration Syntax
+        run: |
+          docker run --rm \
+            --add-host=api:127.0.0.1 \
+            --add-host=web:127.0.0.1 \
+            -v "${{ github.workspace }}/infrastructure/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
+            nginx:alpine nginx -t
+
       - name: Build API Docker Image
         run: docker build -t smartadvisor-api:smoke -f services/api/Dockerfile services/api
+
+      - name: Build RDS Worker Docker Image
+        run: docker build -t smartadvisor-rds-worker:smoke -f services/rds-worker/Dockerfile services/rds-worker
+
+      - name: Build Web Docker Image
+        run: docker build -t smartadvisor-web:smoke -f apps/web/Dockerfile apps/web
+
+  security-load-ci:
+    name: Security Pen-Test & Load Concurrency CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: services/api/package-lock.json
+
+      - name: Build API Service
+        working-directory: services/api
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run Security Penetration Test Suite
+        run: node tests/security/pentest.mjs
+
+      - name: Run 10k Load & ACID Race Stress Suite
+        run: node tests/load/load-test.mjs
+
+  e2e-playwright-ci:
+    name: Playwright E2E Verification CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: |
+            services/api/package-lock.json
+            apps/web/package-lock.json
+            e2e/package-lock.json
+
+      - name: Install & Build API Service
+        working-directory: services/api
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Web Dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Install E2E Dependencies & Chromium
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Typecheck & Run Playwright E2E Suite
+        working-directory: e2e
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Upload Playwright Visual Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-e2e-artifacts
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 14

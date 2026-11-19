@@ -1,17 +1,18 @@
--- PostgreSQL 16 DDL Schema: Core Student Advising Domain
--- Tables: students, course_sections, staged_sections
+-- PostgreSQL 16 DDL Schema: Core Student Advising Domain & Production Release Extensions
+-- Tables: students, course_sections, staged_sections, exception_cases, bypass_rules,
+--         audit_logs, admin_metrics, escalations, schedule_receipts,
+--         users, revoked_tokens, waitlist_entries, notifications, enrollments, rds_fallback_prompts
 
 -- ============================================================================
 -- ACID Row-Level Locking Pattern for Zero-Overbooking Seat Reservations:
 --
 -- BEGIN;
--- SELECT * FROM course_sections WHERE id = $1 FOR UPDATE;
+-- SELECT * FROM course_sections WHERE id = ANY($1) ORDER BY id FOR UPDATE;
 -- -- 1. Verify capacity constraint: (enrolled < capacity)
--- -- 2. Check student prerequisites & standing rules
+-- -- 2. Check student prerequisites, credit floor & timetable clashes
 -- -- 3. Increment enrolled count atomically:
 -- --    UPDATE course_sections SET enrolled = enrolled + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1;
--- -- 4. Record stage entry in cart:
--- --    INSERT INTO staged_sections (student_id, section_id, course_code, added_at) VALUES ($2, $1, $3, $4);
+-- -- 4. Record confirmed enrollment & receipt
 -- COMMIT;
 -- ============================================================================
 
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS students (
     cleared_courses JSONB NOT NULL DEFAULT '[]'::jsonb,
     advising_cleared_by VARCHAR(255) NOT NULL,
     slot_closes_at TIMESTAMPTZ NOT NULL,
+    max_credits NUMERIC(4, 1) NOT NULL DEFAULT 15.0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -51,6 +53,9 @@ CREATE TABLE IF NOT EXISTS course_sections (
     min_credits_required INTEGER DEFAULT NULL,
     prerequisites JSONB NOT NULL DEFAULT '[]'::jsonb,
     is_lab BOOLEAN NOT NULL DEFAULT FALSE,
+    instructor_id VARCHAR(64) DEFAULT NULL,
+    room_capacity INTEGER NOT NULL DEFAULT 55,
+    exam_slot VARCHAR(64) DEFAULT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -97,6 +102,8 @@ CREATE TABLE IF NOT EXISTS exception_cases (
     audit_checks JSONB NOT NULL DEFAULT '[]'::jsonb,
     faculty_decision_by VARCHAR(255) DEFAULT NULL,
     faculty_decision_at VARCHAR(64) DEFAULT NULL,
+    section_id VARCHAR(64) DEFAULT NULL,
+    rule_code VARCHAR(32) DEFAULT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -153,6 +160,7 @@ CREATE TABLE IF NOT EXISTS escalations (
     status VARCHAR(32) NOT NULL DEFAULT 'Open' CHECK (status IN ('Open', 'Mitigated', 'Resolved')),
     demand_surge JSONB NOT NULL DEFAULT '[]'::jsonb,
     breakdown JSONB NOT NULL DEFAULT '[]'::jsonb,
+    auto_generated BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -166,10 +174,140 @@ CREATE TABLE IF NOT EXISTS schedule_receipts (
     total_credits NUMERIC(4, 1) NOT NULL,
     sections JSONB NOT NULL DEFAULT '[]'::jsonb,
     digital_signature VARCHAR(255) NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'confirmed',
+    source VARCHAR(32) NOT NULL DEFAULT 'api',
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Indexes for Faculty and Admin portals
+-- ============================================================================
+-- Idempotent ALTER TABLE Extensions for Existing Databases
+-- ============================================================================
+
+ALTER TABLE students
+    ADD COLUMN IF NOT EXISTS max_credits NUMERIC(4, 1) NOT NULL DEFAULT 15.0;
+
+ALTER TABLE course_sections
+    ADD COLUMN IF NOT EXISTS instructor_id VARCHAR(64) DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS room_capacity INTEGER NOT NULL DEFAULT 55,
+    ADD COLUMN IF NOT EXISTS exam_slot VARCHAR(64) DEFAULT NULL;
+
+ALTER TABLE exception_cases
+    ADD COLUMN IF NOT EXISTS section_id VARCHAR(64) DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS rule_code VARCHAR(32) DEFAULT NULL;
+
+ALTER TABLE escalations
+    ADD COLUMN IF NOT EXISTS auto_generated BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE schedule_receipts
+    ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'confirmed',
+    ADD COLUMN IF NOT EXISTS source VARCHAR(32) NOT NULL DEFAULT 'api';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'chk_course_sections_enrolled_lte_capacity'
+    ) THEN
+        ALTER TABLE course_sections
+            ADD CONSTRAINT chk_course_sections_enrolled_lte_capacity CHECK (enrolled <= capacity);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'chk_course_sections_room_capacity_nonneg'
+    ) THEN
+        ALTER TABLE course_sections
+            ADD CONSTRAINT chk_course_sections_room_capacity_nonneg CHECK (room_capacity >= 0);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'chk_schedule_receipts_status'
+    ) THEN
+        ALTER TABLE schedule_receipts
+            ADD CONSTRAINT chk_schedule_receipts_status CHECK (status IN ('confirmed', 'pending_rds', 'fallback_required', 'failed'));
+    END IF;
+END $$;
+
+-- ============================================================================
+-- Auth, RBAC, Waitlist, Notifications, Enrollments & RDS Fallback Tables
+-- ============================================================================
+
+-- Table: users (auth credentials + RBAC)
+CREATE TABLE IF NOT EXISTS users (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    role VARCHAR(16) NOT NULL CHECK (role IN ('student', 'faculty', 'admin')),
+    password_hash TEXT NOT NULL,
+    instructor_name VARCHAR(255) DEFAULT NULL,
+    department VARCHAR(128) DEFAULT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table: revoked_tokens (JWT logout/invalidation blocklist)
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+    jti VARCHAR(128) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table: waitlist_entries
+CREATE TABLE IF NOT EXISTS waitlist_entries (
+    id VARCHAR(64) PRIMARY KEY,
+    student_id VARCHAR(64) NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    section_id VARCHAR(64) NOT NULL REFERENCES course_sections(id) ON DELETE CASCADE,
+    course_code VARCHAR(32) NOT NULL,
+    position INTEGER NOT NULL DEFAULT 1,
+    status VARCHAR(32) NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'notified', 'promoted', 'cancelled')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_waitlist_student_section UNIQUE (student_id, section_id)
+);
+
+-- Table: notifications (SeatTracker Observer delivery log)
+CREATE TABLE IF NOT EXISTS notifications (
+    id VARCHAR(64) PRIMARY KEY,
+    student_id VARCHAR(64) NOT NULL,
+    section_id VARCHAR(64) DEFAULT NULL,
+    course_code VARCHAR(32) DEFAULT NULL,
+    channel VARCHAR(16) NOT NULL CHECK (channel IN ('SMS', 'PUSH', 'IN_APP')),
+    event_type VARCHAR(64) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'sent' CHECK (status IN ('sent', 'queued', 'failed')),
+    error TEXT DEFAULT NULL,
+    read BOOLEAN NOT NULL DEFAULT FALSE,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table: enrollments (confirmed student enrollments)
+CREATE TABLE IF NOT EXISTS enrollments (
+    id BIGSERIAL PRIMARY KEY,
+    student_id VARCHAR(64) NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    section_id VARCHAR(64) NOT NULL REFERENCES course_sections(id) ON DELETE CASCADE,
+    transaction_id VARCHAR(64) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_enrollment_student_section UNIQUE (student_id, section_id)
+);
+
+-- Table: rds_fallback_prompts (1-click DAG fallback state)
+CREATE TABLE IF NOT EXISTS rds_fallback_prompts (
+    id VARCHAR(64) PRIMARY KEY,
+    student_id VARCHAR(64) NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    failed_section_id VARCHAR(64) NOT NULL,
+    failed_course_code VARCHAR(32) NOT NULL,
+    reason TEXT NOT NULL,
+    alternatives JSONB NOT NULL DEFAULT '[]'::jsonb,
+    resolved BOOLEAN NOT NULL DEFAULT FALSE,
+    resolved_section_id VARCHAR(64) DEFAULT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for Faculty, Admin, Auth & Sync portals
+CREATE INDEX IF NOT EXISTS idx_course_sections_instructor_id ON course_sections(instructor_id);
 CREATE INDEX IF NOT EXISTS idx_exception_cases_student_id ON exception_cases(student_id);
 CREATE INDEX IF NOT EXISTS idx_exception_cases_status ON exception_cases(status);
 CREATE INDEX IF NOT EXISTS idx_bypass_rules_code ON bypass_rules(code);
@@ -178,3 +316,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_escalations_course_code ON escalations(course_code);
 CREATE INDEX IF NOT EXISTS idx_escalations_status ON escalations(status);
 CREATE INDEX IF NOT EXISTS idx_schedule_receipts_student_id ON schedule_receipts(student_id);
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_waitlist_section_id ON waitlist_entries(section_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_student_id ON notifications(student_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rds_fallback_student ON rds_fallback_prompts(student_id, resolved);

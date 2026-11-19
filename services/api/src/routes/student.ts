@@ -1,190 +1,339 @@
 import { Router, Request, Response } from 'express';
-import crypto from 'crypto';
+import { enqueueRdsEnrollment } from '../events/rdsQueue';
+import { requireAuth } from '../middleware/auth';
+import { requireRole } from '../middleware/rbac';
+import {
+  enrollConfirmSchema,
+  petitionSchema,
+  rdsFallbackSchema,
+  sectionIdParamSchema,
+  solveScheduleSchema,
+  stageCartSchema,
+  validateBody,
+  validateParams,
+  waitlistSchema
+} from '../middleware/validate';
+import { CurriculumGraph, normalizeCourseCode } from '../services/curriculumGraph';
+import {
+  checkCreditFloor,
+  checkFinalExamLoad,
+  checkPrerequisites
+} from '../services/ruleValidator';
+import { AdvisingEngine } from '../services/scheduleSolver';
 import { backendStore } from '../store/backendStore';
-import { checkCreditFloor } from '../services/ruleValidator';
-import { CourseSection, ScheduleReceipt } from '../types';
+import { ScheduleStrategy } from '../types';
 
 export const studentRouter = Router();
+
+studentRouter.use(requireAuth, requireRole('student'));
 
 /**
  * POST /api/v1/student/cart/stage
  * Body: { sectionId: string }
- *
- * Stages a course section into the student's cart, enforcing Rule 4.2 credit floor
- * and seat availability checks.
  */
-studentRouter.post('/cart/stage', (req: Request, res: Response) => {
-  const { sectionId } = req.body || {};
+studentRouter.post('/cart/stage', validateBody(stageCartSchema), async (req: Request, res: Response) => {
+  const { sectionId } = req.body as { sectionId: string };
+  const outcome = await backendStore.stageSectionTx(req.user!.id, sectionId);
 
-  const state = backendStore.getState();
-  const targetSection = state.sections.find((s) => s.id === sectionId);
-
-  // 1. Return 404 if section does not exist
-  if (!targetSection) {
-    return res.status(404).json({
-      ok: false,
-      message: 'Section not found'
-    });
-  }
-
-  // 2. Return 200 if already staged
-  if (state.stagedSectionIds.includes(sectionId)) {
+  if (outcome.ok) {
     return res.status(200).json({
       ok: true,
-      state: backendStore.getState()
+      state: outcome.state
     });
   }
 
-  // 3. Enforce Rule 4.2 credit floor standing check
-  const creditFloorResult = checkCreditFloor(targetSection, state.student);
-  if (!creditFloorResult.passed) {
-    return res.status(422).json({
+  if ('modal' in outcome) {
+    return res.status(outcome.status).json({
       ok: false,
-      modal: 'rule_alert',
-      payload: {
-        section: targetSection,
-        studentCredits: creditFloorResult.studentCredits,
-        requiredCredits: creditFloorResult.requiredCredits,
-        ruleCode: 'RULE-4.2'
-      }
+      modal: outcome.modal,
+      payload: outcome.payload
     });
   }
 
-  // 4. Enforce seat availability check
-  if (targetSection.capacity - targetSection.enrolled <= 0) {
-    const alternatives = state.sections.filter(
-      (s) =>
-        s.courseCode === targetSection.courseCode &&
-        s.id !== targetSection.id &&
-        s.capacity - s.enrolled > 0
-    );
-
-    return res.status(409).json({
-      ok: false,
-      modal: 'section_full',
-      payload: {
-        fullSection: targetSection,
-        alternatives
-      }
-    });
-  }
-
-  // 5. Replace existing staged section of same courseCode with sectionId
-  backendStore.updateState((s) => {
-    const filteredStagedIds = s.stagedSectionIds.filter((id) => {
-      const sec = s.sections.find((item) => item.id === id);
-      return sec?.courseCode !== targetSection.courseCode;
-    });
-    s.stagedSectionIds = [...filteredStagedIds, sectionId];
-  });
-
-  // Prepend teal audit log
-  backendStore.addAuditLog(
-    state.student.name,
-    'Section Staged',
-    `Staged ${targetSection.courseCode} Sec ${targetSection.sectionNumber} (${targetSection.timeSlot})`,
-    'teal'
-  );
-
-  return res.status(200).json({
-    ok: true,
-    state: backendStore.getState()
+  return res.status(outcome.status).json({
+    ok: false,
+    message: outcome.message
   });
 });
 
 /**
  * DELETE /api/v1/student/cart/:sectionId
- *
- * Removes a course section from the student's staged cart and records an audit log.
  */
-studentRouter.delete('/cart/:sectionId', (req: Request, res: Response) => {
-  const { sectionId } = req.params;
+studentRouter.delete(
+  '/cart/:sectionId',
+  validateParams(sectionIdParamSchema),
+  async (req: Request, res: Response) => {
+    const { sectionId } = req.params;
+    const current = await backendStore.getStateAsync(req.user!.id);
 
-  const state = backendStore.getState();
-  const targetSection = state.sections.find((s) => s.id === sectionId);
+    const existsInSections = current.sections.some((s) => s.id === sectionId);
+    const existsInCart = current.stagedSectionIds.includes(sectionId);
+    if (!existsInCart) {
+      return res.status(404).json({
+        ok: false,
+        message: existsInSections ? 'Section is not in cart' : 'Section not found'
+      });
+    }
 
-  // Remove sectionId from stagedSectionIds
-  backendStore.updateState((s) => {
-    s.stagedSectionIds = s.stagedSectionIds.filter((id) => id !== sectionId);
+    const result = await backendStore.unstageSectionTx(req.user!.id, sectionId);
+    return res.status(result.status).json({
+      ok: result.ok,
+      state: result.state
+    });
+  }
+);
+
+/**
+ * POST /api/v1/student/petitions
+ */
+studentRouter.post('/petitions', validateBody(petitionSchema), async (req: Request, res: Response) => {
+  const payload = req.body as {
+    sectionId?: string;
+    courseCode: string;
+    ruleCode: string;
+    reason: string;
+  };
+  const result = await backendStore.submitPetitionTx(req.user!.id, payload);
+
+  return res.status(201).json({
+    ok: true,
+    exceptionCase: result.exceptionCase,
+    state: result.state
   });
+});
 
-  // Prepend amber audit log
-  backendStore.addAuditLog(
-    state.student.name,
-    'Section Removed',
-    `Removed ${targetSection?.courseCode || sectionId} from draft plan.`,
-    'amber'
-  );
+/**
+ * POST /api/v1/student/waitlist
+ */
+studentRouter.post('/waitlist', validateBody(waitlistSchema), async (req: Request, res: Response) => {
+  const { sectionId } = req.body as { sectionId: string };
+  const result = await backendStore.joinWaitlistTx(req.user!.id, sectionId);
+
+  if (!result.ok) {
+    return res.status(result.status).json({
+      ok: false,
+      message: result.message,
+      state: result.state
+    });
+  }
 
   return res.status(200).json({
     ok: true,
-    state: backendStore.getState()
+    position: result.position,
+    entry: result.entry,
+    state: result.state
+  });
+});
+
+/**
+ * POST /api/v1/student/schedule/solve
+ */
+studentRouter.post(
+  '/schedule/solve',
+  validateBody(solveScheduleSchema),
+  async (req: Request, res: Response) => {
+    const { courseCodes, strategy, maxCredits } = req.body as {
+      courseCodes?: string[];
+      strategy: ScheduleStrategy;
+      maxCredits?: number;
+    };
+
+    const state = await backendStore.getStateAsync(req.user!.id);
+    const engine = new AdvisingEngine(strategy);
+    const solved = engine.solve({
+      courseCodes,
+      sections: state.sections,
+      student: state.student,
+      bypassRules: state.bypassRules,
+      approvedExceptions: state.exceptions,
+      strategy,
+      maxCredits
+    });
+
+    return res.status(200).json(solved);
+  }
+);
+
+/**
+ * GET /api/v1/student/dag/eligible
+ */
+studentRouter.get('/dag/eligible', async (req: Request, res: Response) => {
+  const state = await backendStore.getStateAsync(req.user!.id);
+  const summary = CurriculumGraph.getInstance().getDagSummary(state.student.clearedCourses);
+
+  return res.status(200).json({
+    ok: true,
+    ...summary
   });
 });
 
 /**
  * POST /api/v1/student/enroll/confirm
- *
- * Confirms the student's staged schedule, atomically increments enrolled seat counts,
- * computes deterministic SHA-256 digital signature, stores official ScheduleReceipt,
- * and logs the lock action.
  */
-studentRouter.post('/enroll/confirm', (_req: Request, res: Response) => {
-  const state = backendStore.getState();
-  const student = state.student;
-  const stagedSectionIds = state.stagedSectionIds;
-
-  const hashPayload = `${student.id}:${student.cartToken}:${stagedSectionIds.join(',')}`;
-  const hashHex = crypto.createHash('sha256').update(hashPayload).digest('hex');
-  const digitalSignature = `SHA256:${hashHex}`;
-
-  const randomFiveDigit = Math.floor(10000 + Math.random() * 90000);
-  const transactionId = `#RDS-TXN-2025-${randomFiveDigit}`;
-
-  let stagedSections: CourseSection[] = [];
-  let totalCredits = 0;
-  let receipt: ScheduleReceipt;
-
-  backendStore.updateState((s) => {
-    s.sections = s.sections.map((sec) => {
-      if (s.stagedSectionIds.includes(sec.id)) {
-        return {
-          ...sec,
-          enrolled: Math.min(sec.capacity, sec.enrolled + 1)
-        };
-      }
-      return sec;
+studentRouter.post(
+  '/enroll/confirm',
+  validateBody(enrollConfirmSchema),
+  async (req: Request, res: Response) => {
+    const { simulateRdsFailure } = (req.body || {}) as { simulateRdsFailure?: boolean };
+    const outcome = await backendStore.confirmEnrollmentTx(req.user!.id, {
+      simulateRdsFailure
     });
 
-    stagedSections = s.stagedSectionIds
-      .map((id) => s.sections.find((sec) => sec.id === id))
-      .filter((sec): sec is CourseSection => Boolean(sec));
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({
+        ok: false,
+        message: outcome.message,
+        state: outcome.state
+      });
+    }
 
-    totalCredits = stagedSections.reduce((acc, curr) => acc + curr.credits, 0);
+    await enqueueRdsEnrollment({
+      studentId: outcome.receipt.studentId ?? outcome.state.student.id,
+      cartToken: outcome.receipt.cartToken ?? outcome.state.student.cartToken,
+      semester: process.env.CURRENT_SEMESTER || 'Spring 2025',
+      transactionId: outcome.receipt.transactionId,
+      sectionIds: outcome.receipt.sections.map((s) => s.id),
+      courses: outcome.receipt.sections.map((s) => ({
+        courseCode: s.courseCode,
+        section: Number(s.sectionNumber) || 1
+      })),
+      stagedSections: outcome.receipt.sections,
+      allSections: outcome.state.sections,
+      clearedCourses: outcome.state.student.clearedCourses,
+      creditsCompleted: outcome.state.student.creditsCompleted,
+      bypassRules: outcome.state.bypassRules,
+      approvedExceptions: outcome.state.exceptions,
+      simulateFailure: Boolean(simulateRdsFailure),
+      enrolledProvisionally: !simulateRdsFailure
+    });
 
-    receipt = {
-      transactionId,
-      studentId: student.id,
-      cartToken: student.cartToken,
-      timestamp: new Date().toLocaleString(),
-      totalCredits,
-      sections: stagedSections,
-      digitalSignature
+    return res.status(200).json({
+      ok: true,
+      receipt: outcome.receipt,
+      state: outcome.state,
+      ...(outcome.fallbackPrompt ? { fallbackPrompt: outcome.fallbackPrompt } : {})
+    });
+  }
+);
+
+/**
+ * POST /api/v1/student/rds/fallback
+ */
+studentRouter.post(
+  '/rds/fallback',
+  validateBody(rdsFallbackSchema),
+  async (req: Request, res: Response) => {
+    const { failedSectionId, fallbackSectionId } = req.body as {
+      failedSectionId: string;
+      fallbackSectionId: string;
     };
 
-    s.receipt = receipt;
-  });
+    const current = await backendStore.getStateAsync(req.user!.id);
+    if (!current.stagedSectionIds.includes(failedSectionId)) {
+      return res.status(409).json({
+        ok: false,
+        message: `Section ${failedSectionId} is not currently staged in your cart.`,
+        receipt: null,
+        state: current
+      });
+    }
 
-  backendStore.addAuditLog(
-    student.name,
-    'RDS Enrollment Locked',
-    `Schedule locked with ${totalCredits} Cr. Generated ${receipt!.transactionId}`,
-    'emerald'
-  );
+    const fallbackSec = current.sections.find((s) => s.id === fallbackSectionId);
+    if (!fallbackSec) {
+      return res.status(404).json({
+        ok: false,
+        message: 'Fallback section not found',
+        receipt: null,
+        state: current
+      });
+    }
 
-  return res.status(200).json({
-    ok: true,
-    receipt: receipt!,
-    state: backendStore.getState()
-  });
-});
+    const remainingStaged = current.sections.filter(
+      (s) => current.stagedSectionIds.includes(s.id) && s.id !== failedSectionId
+    );
+    const fallbackCourseKey = normalizeCourseCode(fallbackSec.courseCode);
+    const duplicateCourseSec = remainingStaged.find(
+      (s) => normalizeCourseCode(s.courseCode) === fallbackCourseKey
+    );
+    if (duplicateCourseSec) {
+      return res.status(409).json({
+        ok: false,
+        message: `Course ${fallbackSec.courseCode} is already staged via ${duplicateCourseSec.id}.`,
+        receipt: null,
+        state: current
+      });
+    }
+
+    const creditCheck = checkCreditFloor(
+      fallbackSec,
+      current.student,
+      current.bypassRules,
+      current.exceptions
+    );
+    if (!creditCheck.passed) {
+      return res.status(422).json({
+        ok: false,
+        modal: 'rule_alert',
+        payload: {
+          section: fallbackSec,
+          studentCredits: creditCheck.studentCredits,
+          requiredCredits: creditCheck.requiredCredits,
+          ruleCode: 'RULE-4.2',
+          overrideEligible: creditCheck.overrideEligible
+        }
+      });
+    }
+
+    const prereqCheck = checkPrerequisites(
+      fallbackSec,
+      current.student,
+      current.bypassRules,
+      current.exceptions
+    );
+    if (!prereqCheck.passed) {
+      return res.status(422).json({
+        ok: false,
+        modal: 'rule_alert',
+        payload: {
+          section: fallbackSec,
+          ruleCode: 'RULE-2.1',
+          missingPrerequisites: prereqCheck.missingPrerequisites
+        }
+      });
+    }
+
+    const examCheck = checkFinalExamLoad([...remainingStaged, fallbackSec], current.bypassRules);
+    if (!examCheck.passed) {
+      return res.status(422).json({
+        ok: false,
+        modal: 'rule_alert',
+        payload: {
+          section: fallbackSec,
+          ruleCode: 'RULE-6.3',
+          conflictingSections: examCheck.conflictingSections
+        }
+      });
+    }
+
+    const outcome = await backendStore.resolveRdsFallbackTx(
+      req.user!.id,
+      failedSectionId,
+      fallbackSectionId
+    );
+
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({
+        ok: false,
+        message: outcome.message,
+        receipt: outcome.receipt,
+        state: outcome.state
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      receipt: outcome.receipt,
+      state: outcome.state
+    });
+  }
+);

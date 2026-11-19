@@ -1,176 +1,173 @@
 import { Router, Request, Response } from 'express';
+import { isPostgresEnabled, query } from '../db/pool';
+import { redisBus } from '../events/redisBus';
+import { evaluateSlaBreach } from '../events/slaMonitor';
+import { requireAuth } from '../middleware/auth';
+import { requireRole } from '../middleware/rbac';
+import {
+  addSeatsSchema,
+  emergencySectionSchema,
+  rds4SyncSchema,
+  validateBody
+} from '../middleware/validate';
+import { formatCourseCode, normalizeCourseCode } from '../services/curriculumGraph';
+import { Rds4SectionSnapshot, syncFromRds4 } from '../services/rds4Sync';
 import { backendStore } from '../store/backendStore';
 import { CourseSection } from '../types';
 
 export const adminRouter = Router();
 
+adminRouter.use(requireAuth, requireRole('admin'));
+
 /**
  * POST /api/v1/admin/scale
- *
- * Simulates Kubernetes node auto-scaling: increments apiNodes by +2,
- * drops p95 latency to 138ms, records the scaling event and logs.
  */
-adminRouter.post('/scale', (_req: Request, res: Response) => {
-  backendStore.updateState((s) => {
-    const nextNodes = s.metrics.apiNodes + 2;
-    s.metrics = {
-      ...s.metrics,
-      apiNodes: nextNodes,
-      p95LatencyMs: 138,
-      requestsPerSec: Math.max(1842, s.metrics.requestsPerSec),
-      lastScalingEvent: `Scaled +2 nodes (${nextNodes} active). p95 Latency stabilized to 138 ms.`
-    };
-  });
-
-  backendStore.addAuditLog(
-    'IT Operations Edge Controller',
-    'Cluster Auto-Scaled',
-    'Provisioned 2 worker instances. P95 latency dropped from 218 ms to 138 ms (SLA <200 ms met).',
-    'emerald'
-  );
+adminRouter.post('/scale', async (_req: Request, res: Response) => {
+  const state = await backendStore.adminScaleTx();
+  await evaluateSlaBreach();
 
   return res.status(200).json({
     ok: true,
-    state: backendStore.getState()
+    state
   });
 });
 
 /**
  * POST /api/v1/admin/acknowledge
- *
- * Acknowledges active surge spike incident, resetting surgeSpikeActive to false.
  */
-adminRouter.post('/acknowledge', (_req: Request, res: Response) => {
-  backendStore.updateState((s) => {
-    s.metrics = {
-      ...s.metrics,
-      surgeSpikeActive: false,
-      lastScalingEvent: 'SEV-1 incident acknowledged by on-call engineer.'
-    };
-  });
+adminRouter.post('/acknowledge', async (_req: Request, res: Response) => {
+  const state = await backendStore.adminAcknowledgeTx();
 
   return res.status(200).json({
     ok: true,
-    state: backendStore.getState()
+    state
   });
 });
 
 /**
  * POST /api/v1/admin/sections/emergency
- * Body: { courseCode: string; sectionData?: Partial<CourseSection> }
- *
- * Provisions an emergency Section 05 for a course under high waitlist surge,
- * updates the matching escalation status to 'Mitigated', and logs the action.
  */
-adminRouter.post('/sections/emergency', (req: Request, res: Response) => {
-  const { courseCode, sectionData = {} } = req.body || {};
+adminRouter.post(
+  '/sections/emergency',
+  validateBody(emergencySectionSchema),
+  async (req: Request, res: Response) => {
+    const { courseCode, sectionData = {} } = req.body as {
+      courseCode: string;
+      sectionData?: Partial<CourseSection>;
+    };
 
-  if (!courseCode) {
-    return res.status(400).json({
-      ok: false,
-      message: 'Course code is required'
+    const normalizedCourseCode = normalizeCourseCode(courseCode);
+    const candidateId = `${normalizedCourseCode.replace(/\s+/g, '')}-05`;
+    const current = await backendStore.getStateAsync();
+    if (current.sections.some((s) => s.id.toUpperCase() === candidateId.toUpperCase())) {
+      return res.status(409).json({
+        ok: false,
+        message: `Emergency section ${candidateId} already exists.`
+      });
+    }
+
+    const existingMatch = current.sections.find(
+      (s) => normalizeCourseCode(s.courseCode) === normalizedCourseCode
+    );
+    const canonicalCourseCode = existingMatch?.courseCode ?? formatCourseCode(courseCode);
+    const state = await backendStore.provisionEmergencySectionTx(canonicalCourseCode, sectionData);
+    return res.status(200).json({
+      ok: true,
+      state
     });
   }
-
-  const newSectionId = `${courseCode.replace(/\s+/g, '')}-05`;
-  const newSection: CourseSection = {
-    id: newSectionId,
-    courseCode,
-    courseTitle: courseCode === 'CSE 327' ? 'Software Engineering' : 'Course',
-    department: 'ECE / CSE',
-    credits: 3.0,
-    sectionNumber: '05',
-    faculty: sectionData.faculty || 'Mr. Tanvir Rahman',
-    days: sectionData.days || 'MW',
-    timeSlot: sectionData.timeSlot || '04:20 PM - 05:50 PM',
-    room: sectionData.room || 'LIB 608',
-    capacity: 40,
-    enrolled: 0,
-    waitlisted: 0,
-    prerequisites: ['CSE 215'],
-    ...sectionData
-  };
-
-  backendStore.updateState((s) => {
-    s.sections = [...s.sections, newSection];
-    s.escalations = s.escalations.map((esc) => {
-      if (esc.courseCode === courseCode) {
-        return {
-          ...esc,
-          status: 'Mitigated',
-          totalCapacity: esc.totalCapacity + 40,
-          deficit: Math.max(0, esc.deficit - 40)
-        };
-      }
-      return esc;
-    });
-  });
-
-  backendStore.addAuditLog(
-    'IT Operations Administrator',
-    'Emergency Section Provisioned',
-    `Created ${courseCode} Sec 05 (${newSection.room}, ${newSection.timeSlot}) with 40 seats.`,
-    'emerald'
-  );
-
-  return res.status(200).json({
-    ok: true,
-    state: backendStore.getState()
-  });
-});
+);
 
 /**
  * POST /api/v1/admin/courses/add-seats
- * Body: { courseCode: string; count: number }
- *
- * Adds seats across all sections of a course, marks matching escalation 'Resolved',
- * and logs the batch capacity increase.
  */
-adminRouter.post('/courses/add-seats', (req: Request, res: Response) => {
-  const { courseCode, count } = req.body || {};
+adminRouter.post(
+  '/courses/add-seats',
+  validateBody(addSeatsSchema),
+  async (req: Request, res: Response) => {
+    const { courseCode, count } = req.body as { courseCode: string; count: number };
+    const current = await backendStore.getStateAsync();
+    const targetNorm = normalizeCourseCode(courseCode);
+    const matching = current.sections.filter(
+      (s) => normalizeCourseCode(s.courseCode) === targetNorm
+    );
 
-  if (!courseCode) {
-    return res.status(400).json({
-      ok: false,
-      message: 'Course code is required'
+    if (matching.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        message: `Course ${courseCode} not found`
+      });
+    }
+
+    const canonicalCourseCode = matching[0].courseCode;
+    let state = await backendStore.addCourseSeatsTx(canonicalCourseCode, count);
+
+    const updatedMatching = state.sections.filter(
+      (s) => normalizeCourseCode(s.courseCode) === targetNorm
+    );
+    const exactCapacity = updatedMatching.reduce((sum, s) => sum + s.capacity, 0);
+    const exactEnrolled = updatedMatching.reduce((sum, s) => sum + s.enrolled, 0);
+    const exactWaitlisted = updatedMatching.reduce((sum, s) => sum + s.waitlisted, 0);
+    const available = exactCapacity - exactEnrolled;
+    const nextStatus = available > 0 ? 'Resolved' : 'Open';
+    const nextDeficit = available > 0 ? 0 : Math.max(1, exactWaitlisted);
+
+    if (!isPostgresEnabled()) {
+      state = backendStore.updateState((s) => {
+        s.escalations = s.escalations.map((esc) =>
+          normalizeCourseCode(esc.courseCode) === targetNorm
+            ? {
+                ...esc,
+                totalCapacity: exactCapacity,
+                enrolled: exactEnrolled,
+                waitlisted: exactWaitlisted,
+                deficit: nextDeficit,
+                status: nextStatus
+              }
+            : esc
+        );
+      });
+    } else {
+      await query(
+        `UPDATE escalations
+         SET total_capacity = $2,
+             enrolled = $3,
+             waitlisted = $4,
+             deficit = $5,
+             status = $6,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE course_code = $1`,
+        [canonicalCourseCode, exactCapacity, exactEnrolled, exactWaitlisted, nextDeficit, nextStatus]
+      );
+      state = await backendStore.getStateAsync();
+      await redisBus.publishSyncEvent({
+        type: 'SYNC_UPDATE',
+        studentId: state.student.id,
+        state,
+        timestamp: Date.now()
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      state
     });
   }
+);
 
-  const numericCount = Number(count) || 0;
-
-  backendStore.updateState((s) => {
-    s.sections = s.sections.map((sec) => {
-      if (sec.courseCode === courseCode) {
-        return {
-          ...sec,
-          capacity: sec.capacity + numericCount
-        };
-      }
-      return sec;
-    });
-
-    s.escalations = s.escalations.map((esc) => {
-      if (esc.courseCode === courseCode) {
-        return {
-          ...esc,
-          totalCapacity: esc.totalCapacity + numericCount * 4,
-          deficit: Math.max(0, esc.deficit - numericCount * 4),
-          status: 'Resolved'
-        };
-      }
-      return esc;
-    });
+/**
+ * POST /api/v1/admin/rds4/sync
+ */
+adminRouter.post('/rds4/sync', validateBody(rds4SyncSchema), async (req: Request, res: Response) => {
+  const { snapshots } = (req.body || {}) as { snapshots?: Rds4SectionSnapshot[] };
+  const syncResult = await syncFromRds4(snapshots, {
+    actor: req.user?.name ?? 'IT Operations Admin'
   });
-
-  backendStore.addAuditLog(
-    'IT Operations Administrator',
-    'Batch Capacity Added',
-    `Added +${numericCount} seats across all sections of ${courseCode}.`,
-    'emerald'
-  );
+  const state = await backendStore.getStateAsync();
 
   return res.status(200).json({
     ok: true,
-    state: backendStore.getState()
+    syncResult,
+    state
   });
 });

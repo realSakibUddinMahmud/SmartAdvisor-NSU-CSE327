@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSmartAdvisor } from '@/store/smartAdvisorStore';
@@ -11,30 +11,74 @@ import {
   Database,
   Bell,
   Settings,
-  Cpu,
-  ShieldAlert,
-  HardDrive
+  Cpu
 } from 'lucide-react';
 
 export function AdminSidebar() {
   const pathname = usePathname();
-  const { escalations, metrics } = useSmartAdvisor();
+  const { escalations, metrics, healthCheck } = useSmartAdvisor();
+
+  const [activeHash, setActiveHash] = useState<string>('');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const syncHash = () => setActiveHash(window.location.hash || '');
+    syncHash();
+    window.addEventListener('hashchange', syncHash);
+    return () => window.removeEventListener('hashchange', syncHash);
+  }, [pathname]);
 
   const openEscalationsCount = escalations.filter((e) => e.status === 'Open').length;
 
   const navItems = [
-    { label: 'System Health', href: '/admin/health', icon: Activity },
+    {
+      label: 'System Health',
+      href: '/admin/health',
+      matchPath: '/admin/health',
+      matchHash: '',
+      icon: Activity
+    },
     {
       label: 'Seat Escalations',
       href: '/admin/escalations',
+      matchPath: '/admin/escalations',
+      matchHash: '',
       icon: Flame,
       badge: openEscalationsCount > 0 ? `${openEscalationsCount} SEV-1` : undefined
     },
-    { label: 'Service Nodes', href: '/admin/health', icon: Server, badge: `${metrics.apiNodes} Active` },
-    { label: 'Database Pool', href: '/admin/health', icon: Database, badge: `${metrics.poolUsed}/${metrics.poolTotal}` },
-    { label: 'Alert Log', href: '/admin/health', icon: Bell },
-    { label: 'Infrastructure', href: '/admin/health', icon: Settings },
+    {
+      label: 'Service Nodes',
+      href: '/admin/health#services',
+      matchPath: '/admin/health',
+      matchHash: '#services',
+      icon: Server,
+      badge: `${metrics.apiNodes} Active`
+    },
+    {
+      label: 'Database Pool',
+      href: '/admin/health#database',
+      matchPath: '/admin/health',
+      matchHash: '#database',
+      icon: Database,
+      badge: `${metrics.poolUsed}/${metrics.poolTotal}`
+    },
+    {
+      label: 'Alert Log',
+      href: '/admin/health#alerts',
+      matchPath: '/admin/health',
+      matchHash: '#alerts',
+      icon: Bell
+    },
+    {
+      label: 'Infrastructure',
+      href: '/admin/health#infrastructure',
+      matchPath: '/admin/health',
+      matchHash: '#infrastructure',
+      icon: Settings
+    }
   ];
+
+  const isHealthy = !healthCheck || healthCheck.status === 'ok';
 
   return (
     <aside className="w-64 bg-slate-900 text-white border-r border-slate-800 flex flex-col justify-between shrink-0 hidden md:flex min-h-[calc(100vh-2.75rem)]">
@@ -58,12 +102,15 @@ export function AdminSidebar() {
             Telemetry &amp; Infrastructure
           </div>
           {navItems.map((item) => {
-            const isActive = pathname === item.href;
+            const isActive =
+              pathname === item.matchPath &&
+              (item.matchPath === '/admin/escalations' || activeHash === item.matchHash);
             const Icon = item.icon;
             return (
               <Link
                 key={item.label}
                 href={item.href}
+                onClick={() => setActiveHash(item.matchHash)}
                 className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
                   isActive
                     ? 'bg-rose-600 text-white font-bold shadow-sm'
@@ -95,13 +142,17 @@ export function AdminSidebar() {
       <div className="p-4 border-t border-slate-800 space-y-2">
         <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
           <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span
+              className={`w-2 h-2 rounded-full ${
+                isHealthy ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+              }`}
+            ></span>
             PRODUCTION RDS
           </span>
-          <span className="text-slate-300">ap-south-1</span>
+          <span className="text-slate-300">{healthCheck?.mode ?? 'ap-south-1'}</span>
         </div>
         <div className="text-[10px] text-slate-500 font-mono">
-          Dhaka Edge &bull; Cluster Healthy
+          Dhaka Edge &bull; {isHealthy ? 'Cluster Healthy' : 'Degraded Mode'}
         </div>
       </div>
     </aside>

@@ -4,17 +4,24 @@ import '../theme/app_theme.dart';
 class CreditSummaryRing extends StatelessWidget {
   final double currentCredits;
   final double maxCredits;
+  final int clashCount;
 
   const CreditSummaryRing({
     super.key,
-    this.currentCredits = 12.0,
+    this.currentCredits = 10.0,
     this.maxCredits = 15.0,
+    this.clashCount = 0,
   });
 
   @override
   Widget build(BuildContext context) {
-    final percentage = (currentCredits / maxCredits).clamp(0.0, 1.0);
-    final percentInt = (percentage * 100).toInt();
+    final percentage =
+        maxCredits <= 0 ? 0.0 : (currentCredits / maxCredits).clamp(0.0, 1.0);
+    final percentInt = (percentage * 100).round();
+    final hasClashes = clashCount > 0;
+    final clashLabel = hasClashes
+        ? '$clashCount ${clashCount == 1 ? 'Clash' : 'Clashes'}'
+        : 'No Clashes';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -36,7 +43,8 @@ class CreditSummaryRing extends StatelessWidget {
                   value: percentage,
                   strokeWidth: 6,
                   backgroundColor: AppTheme.canvasAlt,
-                  valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.teal),
+                  valueColor:
+                      const AlwaysStoppedAnimation<Color>(AppTheme.teal),
                 ),
                 Text(
                   '$percentInt%',
@@ -80,23 +88,33 @@ class CreditSummaryRing extends StatelessWidget {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
-                        color: AppTheme.emeraldLight,
+                        color: hasClashes
+                            ? AppTheme.crimsonLight
+                            : AppTheme.emeraldLight,
                         borderRadius: BorderRadius.circular(4),
                       ),
-                      child: const Text(
-                        'No Clashes',
+                      child: Text(
+                        clashLabel,
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
-                          color: AppTheme.emeraldDark,
+                          color: hasClashes
+                              ? AppTheme.crimsonDark
+                              : AppTheme.emeraldDark,
                         ),
                       ),
                     ),
-                    const Text(
-                      '80% Utilized',
-                      style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                    Text(
+                      '$percentInt% Utilized',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.textMuted,
+                      ),
                     ),
                   ],
                 ),

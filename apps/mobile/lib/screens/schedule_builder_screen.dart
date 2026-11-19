@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
-import '../state/app_state.dart';
 import '../models/models.dart';
+import '../state/app_state.dart';
+import '../theme/app_theme.dart';
 import '../widgets/bottom_sheets.dart';
 
 class ScheduleBuilderScreen extends StatelessWidget {
@@ -11,41 +11,63 @@ class ScheduleBuilderScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final stagedSections = appState.stagedSections;
+    final clashes = appState.clashes;
+    final clashCount = clashes.length;
+    final hasSaturday = stagedSections.any(
+      (s) => DayCodeHelper.expandDayCodes(s.days).contains('Sat'),
+    );
+    final clashingSectionIds = <String>{
+      for (final c in clashes) ...[c.sectionA.id, c.sectionB.id],
+    };
+
+    // Distinct time slots sorted chronologically
+    final timeSlots = stagedSections.map((s) => s.timeSlot).toSet().toList()
+      ..sort((a, b) {
+        final startA = DayCodeHelper.parseTimeSlot(a)?.startMin ?? 0;
+        final startB = DayCodeHelper.parseTimeSlot(b)?.startMin ?? 0;
+        return startA.compareTo(startB);
+      });
+
+    final fallbackPrompt = appState.rdsFallbackPrompt;
+    final hasActiveFallback =
+        fallbackPrompt != null && !fallbackPrompt.resolved;
+    final solveResult = appState.lastSolveResult;
+    final fitLabel = solveResult != null
+        ? 'Gap ${solveResult.idleGapMinutes}m AI'
+        : '96% Plan Fit AI';
+
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header & Strategy Toggle
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          // Header & Strategy Toggle (Wrap prevents 360dp truncation/overflow)
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 10,
             children: [
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Instant Schedule AI Builder',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.navy,
-                        letterSpacing: -0.2,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+              const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Instant Schedule AI Builder',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.navy,
+                      letterSpacing: -0.2,
                     ),
-                    Text(
-                      'Zero-Clash Optimization Engine',
-                      style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
+                  ),
+                  Text(
+                    'Zero-Clash Optimization Engine',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                  ),
+                ],
               ),
-              const SizedBox(width: 8),
-              // Milestone First vs Minimize Gaps Toggle
               Container(
                 padding: const EdgeInsets.all(3),
                 decoration: BoxDecoration(
@@ -77,27 +99,118 @@ class ScheduleBuilderScreen extends StatelessWidget {
           Row(
             children: [
               _buildKpiBadge(
-                label: '${appState.totalCredits.toStringAsFixed(1)} / 15.0 Cr',
+                label:
+                    '${appState.totalCredits.toStringAsFixed(1)} / ${appState.maxCredits.toStringAsFixed(1)} Cr',
                 icon: Icons.school_outlined,
                 color: AppTheme.navy,
               ),
               const SizedBox(width: 8),
               _buildKpiBadge(
-                label: '0 Clash',
-                icon: Icons.check_circle_outline,
-                color: AppTheme.emerald,
+                label: '$clashCount ${clashCount <= 1 ? 'Clash' : 'Clashes'}',
+                icon: clashCount == 0
+                    ? Icons.check_circle_outline
+                    : Icons.error_outline_rounded,
+                color: clashCount == 0 ? AppTheme.emerald : AppTheme.crimson,
               ),
               const SizedBox(width: 8),
               _buildKpiBadge(
-                label: '96% Plan Fit AI',
+                label: fitLabel,
                 icon: Icons.auto_awesome,
                 color: AppTheme.teal,
               ),
             ],
           ),
+
+          if (clashCount > 0) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppTheme.crimsonLight,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.crimson.withOpacity(0.3)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'TIMETABLE CLASH DETECTED',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.crimsonDark,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  ...clashes.map(
+                    (c) => Text(
+                      '• ${c.sectionA.courseCode} (${c.sectionA.days}) vs ${c.sectionB.courseCode} (${c.sectionB.days}) on ${c.day}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.crimsonDark,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          if (hasActiveFallback) ...[
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: () {
+                MobileBottomSheets.showRdsFallbackSheet(
+                  context,
+                  prompt: fallbackPrompt,
+                  appState: appState,
+                );
+              },
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.amberLight,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.amber.withOpacity(0.4)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.sync_problem_rounded,
+                      color: AppTheme.amberDark,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'RDS Fallback ready for ${fallbackPrompt.failedCourseCode}. Tap to switch.',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.amberDark,
+                        ),
+                      ),
+                    ),
+                    const Text(
+                      'Resolve →',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.navy,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+
           const SizedBox(height: 18),
 
-          // 5-Day Compact Timetable Grid
+          // Dynamic 6-Day Timetable Grid (Sun, Mon, Tue, Wed, Thu, Sat)
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -108,13 +221,15 @@ class ScheduleBuilderScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Row(
+                Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Expanded(
                       child: Text(
-                        '5-DAY TIMETABLE PREVIEW',
-                        style: TextStyle(
+                        hasSaturday
+                            ? '6-DAY TIMETABLE PREVIEW'
+                            : '5-DAY TIMETABLE PREVIEW',
+                        style: const TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 0.8,
@@ -124,8 +239,8 @@ class ScheduleBuilderScreen extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    SizedBox(width: 8),
-                    Text(
+                    const SizedBox(width: 8),
+                    const Text(
                       'ST • MW • RA Pattern',
                       style: TextStyle(fontSize: 10, color: AppTheme.textMuted),
                     ),
@@ -133,12 +248,13 @@ class ScheduleBuilderScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
 
-                // Compact Table header
+                // 6-Day Header: Sun, Mon, Tue, Wed, Thu, Sat
                 Row(
-                  children: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'].map((day) {
+                  children: DayCodeHelper.allWeekDays.map((day) {
                     return Expanded(
                       child: Container(
                         padding: const EdgeInsets.symmetric(vertical: 4),
+                        margin: const EdgeInsets.symmetric(horizontal: 1),
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
                           color: AppTheme.canvas,
@@ -158,18 +274,55 @@ class ScheduleBuilderScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
 
-                // Timetable Slots Row representation
-                _buildTimetableSlotRow('09:40 AM', ['-', 'CSE 311', '-', 'CSE 311', 'CSE 311L']),
-                const SizedBox(height: 6),
-                _buildTimetableSlotRow('11:20 AM', ['CSE 327', '-', 'CSE 327', '-', 'CSE 311L']),
-                const SizedBox(height: 6),
-                _buildTimetableSlotRow('01:20 PM', ['MAT 361', 'CSE 331', 'MAT 361', 'CSE 331', '-']),
+                if (timeSlots.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Center(
+                      child: Text(
+                        'No courses staged in timetable yet.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textMuted,
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  ...timeSlots.map((slot) {
+                    final cells = DayCodeHelper.allWeekDays.map((day) {
+                      final matching = stagedSections.where((sec) {
+                        if (sec.timeSlot != slot) return false;
+                        return DayCodeHelper.expandDayCodes(sec.days)
+                            .contains(day);
+                      }).toList();
+                      return matching;
+                    }).toList();
+
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            slot,
+                            style: const TextStyle(
+                              fontSize: 9,
+                              color: AppTheme.textMuted,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          _buildDynamicTimetableRow(cells, clashingSectionIds),
+                        ],
+                      ),
+                    );
+                  }),
               ],
             ),
           ),
           const SizedBox(height: 20),
 
-          // Staged Courses List Header
+          // Staged Courses List Header + AI Optimize Trigger
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -187,9 +340,30 @@ class ScheduleBuilderScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              const Text(
-                'Auto-Ranked by AI',
-                style: TextStyle(fontSize: 10, color: AppTheme.teal, fontWeight: FontWeight.bold),
+              InkWell(
+                onTap: () async {
+                  final messenger = ScaffoldMessenger.maybeOf(context);
+                  final res = await appState.solveSchedule(applyToCart: true);
+                  if (!context.mounted) return;
+                  if (res != null) {
+                    messenger?.showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'AI ${res.strategy.wireValue} plan applied (${res.totalCredits.toStringAsFixed(1)} Cr, ${res.clashes.length} clashes).',
+                        ),
+                        backgroundColor: AppTheme.teal,
+                      ),
+                    );
+                  }
+                },
+                child: const Text(
+                  'AI Optimize Cart →',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppTheme.teal,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
             ],
           ),
@@ -210,25 +384,54 @@ class ScheduleBuilderScreen extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: () {
-                MobileBottomSheets.showSeatApproved(
-                  context,
-                  courseCode: 'CSE 327',
-                  sectionNumber: '01',
-                  rdsToken: '#NSU-241215-327A',
-                  onViewSchedule: () {},
-                );
+              onPressed: () async {
+                final messenger = ScaffoldMessenger.maybeOf(context);
+                final res = await appState.confirmEnrollment();
+                if (!context.mounted) return;
+
+                if (res.fallbackPrompt != null) {
+                  MobileBottomSheets.showRdsFallbackSheet(
+                    context,
+                    prompt: res.fallbackPrompt!,
+                    appState: appState,
+                  );
+                } else if (res.ok && res.receipt != null) {
+                  final firstSec = res.receipt!.sections.isNotEmpty
+                      ? res.receipt!.sections.first
+                      : null;
+                  MobileBottomSheets.showSeatApproved(
+                    context,
+                    courseCode: firstSec?.courseCode ?? 'Spring 2025',
+                    sectionNumber: firstSec?.sectionNumber ?? 'Plan',
+                    rdsToken: res.receipt!.transactionId,
+                    digitalSignature: res.receipt!.digitalSignature,
+                    totalCredits: res.receipt!.totalCredits,
+                    onViewSchedule: () {},
+                  );
+                } else if (res.message != null) {
+                  messenger?.showSnackBar(
+                    SnackBar(
+                      content: Text(res.message!),
+                      backgroundColor: AppTheme.crimson,
+                    ),
+                  );
+                }
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.navy,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 elevation: 0,
               ),
               child: Text(
                 'Confirm (${appState.totalCredits.toStringAsFixed(1)} Cr) Finalize →',
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ),
@@ -288,7 +491,11 @@ class ScheduleBuilderScreen extends StatelessWidget {
                 fit: BoxFit.scaleDown,
                 child: Text(
                   label,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
                   maxLines: 1,
                 ),
               ),
@@ -299,34 +506,57 @@ class ScheduleBuilderScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildTimetableSlotRow(String time, List<String> subjects) {
+  Widget _buildDynamicTimetableRow(
+    List<List<CourseSection>> dayCells,
+    Set<String> clashingSectionIds,
+  ) {
     return Row(
-      children: subjects.map((sub) {
-        final isEmpty = sub == '-';
+      children: dayCells.map((cellSections) {
+        final isEmpty = cellSections.isEmpty;
+        final hasClash = cellSections.length > 1 ||
+            cellSections.any((s) => clashingSectionIds.contains(s.id));
+        final label = isEmpty
+            ? '-'
+            : cellSections.map((s) => s.courseCode).join('\n');
+
         return Expanded(
           child: Container(
             height: 38,
-            margin: const EdgeInsets.symmetric(horizontal: 2),
+            margin: const EdgeInsets.symmetric(horizontal: 1.5),
+            padding: const EdgeInsets.symmetric(horizontal: 2),
             decoration: BoxDecoration(
-              color: isEmpty
-                  ? AppTheme.canvas
-                  : sub.contains('327')
-                      ? AppTheme.navy.withOpacity(0.08)
-                      : AppTheme.teal.withOpacity(0.12),
+              color: hasClash
+                  ? AppTheme.crimsonLight
+                  : isEmpty
+                      ? AppTheme.canvas
+                      : cellSections.first.courseCode.contains('327')
+                          ? AppTheme.navy.withOpacity(0.08)
+                          : AppTheme.teal.withOpacity(0.12),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                color: isEmpty ? AppTheme.border.withOpacity(0.5) : AppTheme.border,
+                color: hasClash
+                    ? AppTheme.crimson
+                    : isEmpty
+                        ? AppTheme.border.withOpacity(0.5)
+                        : AppTheme.border,
               ),
             ),
             child: Center(
-              child: Text(
-                sub,
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
-                  color: isEmpty ? AppTheme.textMuted : AppTheme.navy,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    color: hasClash
+                        ? AppTheme.crimsonDark
+                        : isEmpty
+                            ? AppTheme.textMuted
+                            : AppTheme.navy,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-                textAlign: TextAlign.center,
               ),
             ),
           ),
@@ -336,6 +566,12 @@ class ScheduleBuilderScreen extends StatelessWidget {
   }
 
   Widget _buildStagedCard(BuildContext context, StagedCourse course) {
+    final fullSectionObj = appState.findSectionById(course.resolvedSectionId);
+    final alternatives = appState.alternativeSectionsFor(
+      course.courseCode,
+      excludeSectionId: course.resolvedSectionId,
+    );
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
@@ -355,7 +591,11 @@ class ScheduleBuilderScreen extends StatelessWidget {
                     Flexible(
                       child: Text(
                         '${course.courseCode} Sec ${course.sectionNumber}',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.navy),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.navy,
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -363,14 +603,21 @@ class ScheduleBuilderScreen extends StatelessWidget {
                     const SizedBox(width: 6),
                     Text(
                       '(${course.credits.toStringAsFixed(1)} Cr)',
-                      style: const TextStyle(fontSize: 11, color: AppTheme.teal, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.teal,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 2),
                 Text(
                   '${course.days} ${course.timeSlot} • ${course.room}',
-                  style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppTheme.textMuted,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -383,35 +630,49 @@ class ScheduleBuilderScreen extends StatelessWidget {
             children: [
               TextButton(
                 onPressed: () {
+                  final messenger = ScaffoldMessenger.maybeOf(context);
                   MobileBottomSheets.showSectionFullFallback(
                     context,
                     courseCode: course.courseCode,
                     fullSection: course.sectionNumber,
-                    onSelectAlternative: (newSec) {
-                      appState.addStagedCourse(
-                        StagedCourse(
-                          courseCode: course.courseCode,
-                          sectionNumber: newSec,
-                          faculty: course.faculty,
-                          timeSlot: course.timeSlot,
-                          days: course.days,
-                          room: course.room,
-                          credits: course.credits,
-                        ),
-                      );
+                    fullSectionObj: fullSectionObj,
+                    alternatives: alternatives,
+                    appState: appState,
+                    onSelectAlternative: (newSec) async {
+                      final normalizedCode =
+                          course.courseCode.replaceAll(' ', '');
+                      final newId = '$normalizedCode-$newSec';
+                      final res = await appState.stageSection(newId);
+                      if (!res.isStaged && res.message != null) {
+                        messenger?.showSnackBar(
+                          SnackBar(
+                            content: Text(res.message!),
+                            backgroundColor: AppTheme.crimson,
+                          ),
+                        );
+                      }
                     },
                   );
                 },
                 style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                child: const Text('Swap Sec', style: TextStyle(fontSize: 11, color: AppTheme.teal)),
+                child: const Text(
+                  'Swap Sec',
+                  style: TextStyle(fontSize: 11, color: AppTheme.teal),
+                ),
               ),
               IconButton(
-                onPressed: () => appState.removeStagedCourse(course.courseCode),
-                icon: const Icon(Icons.close, size: 16, color: AppTheme.textMuted),
+                onPressed: () =>
+                    appState.unstageSection(course.resolvedSectionId),
+                icon: const Icon(
+                  Icons.close,
+                  size: 16,
+                  color: AppTheme.textMuted,
+                ),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
               ),

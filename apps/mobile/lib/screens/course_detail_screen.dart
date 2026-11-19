@@ -1,82 +1,138 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
-import '../state/app_state.dart';
 import '../models/models.dart';
+import '../state/app_state.dart';
+import '../theme/app_theme.dart';
 import '../widgets/bottom_sheets.dart';
 
 class CourseDetailScreen extends StatefulWidget {
   final AppState appState;
+  final String courseCode;
 
-  const CourseDetailScreen({super.key, required this.appState});
+  const CourseDetailScreen({
+    super.key,
+    required this.appState,
+    this.courseCode = 'CSE 327',
+  });
 
   @override
   State<CourseDetailScreen> createState() => _CourseDetailScreenState();
 }
 
 class _CourseDetailScreenState extends State<CourseDetailScreen> {
-  String _selectedSectionNumber = '01';
+  String? _selectedSectionNumber;
 
-  final List<CourseSection> _sections = [
-    const CourseSection(
-      id: 'CSE327-01',
-      courseCode: 'CSE 327',
-      sectionNumber: '01',
-      faculty: 'Dr. Nabeel Mohammed',
-      days: 'ST',
-      timeSlot: '11:20 AM - 12:50 PM',
-      room: 'SAC 502',
-      capacity: 40,
-      enrolled: 28,
-      badge: 'Recommended',
-    ),
-    const CourseSection(
-      id: 'CSE327-02',
-      courseCode: 'CSE 327',
-      sectionNumber: '02',
-      faculty: 'Dr. Silvia Ahmed',
-      days: 'MW',
-      timeSlot: '09:40 AM - 11:10 AM',
-      room: 'NAC 408',
-      capacity: 40,
-      enrolled: 36,
-      badge: '4 Seats Left',
-    ),
-    const CourseSection(
-      id: 'CSE327-03',
-      courseCode: 'CSE 327',
-      sectionNumber: '03',
-      faculty: 'Prof. Dr. Rajesh Palit',
-      days: 'ST',
-      timeSlot: '01:20 PM - 02:50 PM',
-      room: 'SAC 415',
-      capacity: 40,
-      enrolled: 40,
-      waitlisted: 14,
-      badge: 'Full (40/40)',
-    ),
-    const CourseSection(
-      id: 'CSE327-04',
-      courseCode: 'CSE 327',
-      sectionNumber: '04',
-      faculty: 'Mr. Tanvir Rahman',
-      days: 'RA',
-      timeSlot: '04:20 PM - 05:50 PM',
-      room: 'LIB 602',
-      capacity: 40,
-      enrolled: 21,
-      badge: 'Evening Slot',
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    widget.appState.addListener(_onStateChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.appState.removeListener(_onStateChanged);
+    super.dispose();
+  }
+
+  void _onStateChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _stageAndHandleSection(CourseSection targetSec) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final res = await widget.appState.stageSection(targetSec.id);
+    if (!mounted) return;
+
+    if (res.isStaged) {
+      MobileBottomSheets.showSeatApproved(
+        context,
+        courseCode: targetSec.courseCode,
+        sectionNumber: targetSec.sectionNumber,
+        rdsToken: widget.appState.cartToken,
+        onViewSchedule: () {
+          Navigator.pop(context);
+          widget.appState.setTab(1);
+        },
+      );
+    } else if (res.kind == StageResultKind.ruleAlert) {
+      MobileBottomSheets.showMissingPrereqRule42(
+        context,
+        targetCourse: targetSec.courseCode,
+        sectionId: targetSec.id,
+        ruleCode: res.ruleCode ?? 'RULE-4.2',
+        studentCredits: res.studentCredits,
+        requiredCredits: res.requiredCredits,
+        missingPrerequisites: res.missingPrerequisites,
+        conflictingSections: res.conflictingSections,
+        appState: widget.appState,
+      );
+    } else if (res.kind == StageResultKind.sectionFull) {
+      MobileBottomSheets.showSectionFullFallback(
+        context,
+        courseCode: targetSec.courseCode,
+        fullSection: targetSec.sectionNumber,
+        fullSectionObj: res.fullSection ?? targetSec,
+        alternatives: res.alternatives,
+        appState: widget.appState,
+        onSelectAlternative: (altSec) {
+          if (mounted) {
+            setState(() => _selectedSectionNumber = altSec);
+          }
+        },
+      );
+    } else if (res.message != null) {
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(res.message!),
+          backgroundColor: AppTheme.crimson,
+        ),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final sections = widget.appState.sectionsForCourse(widget.courseCode);
+    if (sections.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(
+          backgroundColor: AppTheme.navy,
+          foregroundColor: Colors.white,
+          title: Text('${widget.courseCode} • Section Picker'),
+        ),
+        body: const Center(
+          child: Text('No sections available for this course.'),
+        ),
+      );
+    }
+
+    final activeSelection = _selectedSectionNumber != null &&
+            sections.any((s) => s.sectionNumber == _selectedSectionNumber)
+        ? _selectedSectionNumber!
+        : sections.first.sectionNumber;
+
+    final primary = sections.first;
+    final openSectionsCount = sections.where((s) => !s.isFull).length;
+    final avgEnrolled =
+        (sections.fold<int>(0, (sum, s) => sum + s.enrolled) / sections.length)
+            .round();
+    final avgCapacity =
+        (sections.fold<int>(0, (sum, s) => sum + s.capacity) / sections.length)
+            .round();
+
+    final clearedGrades = <String, String>{
+      for (final c in widget.appState.student.clearedCourses)
+        DayCodeHelper.normalizeCourseCode(c.code): c.grade,
+    };
+
+    final prereqs = primary.prerequisites;
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: AppTheme.navy,
         foregroundColor: Colors.white,
-        title: const Text(
-          'CSE 327 • Section Picker',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        title: Text(
+          '${primary.courseCode} • Section Picker',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
       ),
       body: SingleChildScrollView(
@@ -98,38 +154,71 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'CSE 327',
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.navy),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: AppTheme.navy.withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(6),
+                      Expanded(
+                        child: Text(
+                          primary.courseCode,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                            color: AppTheme.navy,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        child: const Text(
-                          '3.0 Cr • Major Core',
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.navy),
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.navy.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            '${primary.credits.toStringAsFixed(1)} Cr • ${primary.department}',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.navy,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 4),
-                  const Text(
-                    'Software Engineering',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.textSecondary),
+                  Text(
+                    primary.courseTitle.isNotEmpty
+                        ? primary.courseTitle
+                        : primary.courseCode,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textSecondary,
+                    ),
                   ),
                   const SizedBox(height: 14),
 
                   // Stats Row
                   Row(
                     children: [
-                      _buildStatBox('04 Total', 'Sections'),
+                      _buildStatBox(
+                        '${sections.length.toString().padLeft(2, '0')} Total',
+                        'Sections',
+                      ),
                       const SizedBox(width: 8),
-                      _buildStatBox('02 Sec Open', 'Seat Availability', isPositive: true),
+                      _buildStatBox(
+                        '${openSectionsCount.toString().padLeft(2, '0')} Sec Open',
+                        'Seat Availability',
+                        isPositive: openSectionsCount > 0,
+                      ),
                       const SizedBox(width: 8),
-                      _buildStatBox('38/40', 'Avg Capacity'),
+                      _buildStatBox('$avgEnrolled/$avgCapacity', 'Avg Capacity'),
                     ],
                   ),
                 ],
@@ -161,17 +250,53 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      _buildDagNode('CSE 215', 'Grade: A', true),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 4),
-                        child: Icon(Icons.arrow_forward_rounded, size: 16, color: AppTheme.emerald),
+                      if (prereqs.isEmpty)
+                        _buildDagNode('No Prereqs', 'Entry Level', true)
+                      else
+                        for (final p in prereqs) ...[
+                          Builder(
+                            builder: (_) {
+                              final norm = DayCodeHelper.normalizeCourseCode(p);
+                              final grade = clearedGrades[norm];
+                              final passed = grade != null;
+                              return _buildDagNode(
+                                p,
+                                passed ? 'Grade: $grade' : 'Missing',
+                                passed,
+                              );
+                            },
+                          ),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 4),
+                            child: Icon(
+                              Icons.arrow_forward_rounded,
+                              size: 16,
+                              color: AppTheme.emerald,
+                            ),
+                          ),
+                        ],
+                      if (primary.minCreditsRequired != null) ...[
+                        _buildDagNode(
+                          '${primary.minCreditsRequired}+ Cr',
+                          '${widget.appState.completedCredits}/${primary.minCreditsRequired}',
+                          widget.appState.completedCredits >=
+                              primary.minCreditsRequired!,
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 4),
+                          child: Icon(
+                            Icons.arrow_forward_rounded,
+                            size: 16,
+                            color: AppTheme.amber,
+                          ),
+                        ),
+                      ],
+                      _buildDagNode(
+                        primary.courseCode,
+                        'Target',
+                        false,
+                        isTarget: true,
                       ),
-                      _buildDagNode('CSE 311', 'Grade: A-', true),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 4),
-                        child: Icon(Icons.arrow_forward_rounded, size: 16, color: AppTheme.emerald),
-                      ),
-                      _buildDagNode('CSE 327', 'Target', false, isTarget: true),
                     ],
                   ),
                 ],
@@ -179,7 +304,6 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
             ),
             const SizedBox(height: 20),
 
-            // Selectable Section Cards
             const Text(
               'SELECTABLE SECTIONS',
               style: TextStyle(
@@ -191,9 +315,8 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
             ),
             const SizedBox(height: 10),
 
-            ...List.generate(_sections.length, (index) {
-              final sec = _sections[index];
-              final isSelected = _selectedSectionNumber == sec.sectionNumber;
+            ...sections.map((sec) {
+              final isSelected = activeSelection == sec.sectionNumber;
               return Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: _buildSectionCard(sec, isSelected),
@@ -222,12 +345,20 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.lock_clock_outlined, size: 14, color: AppTheme.teal),
+                  const Icon(
+                    Icons.lock_clock_outlined,
+                    size: 14,
+                    color: AppTheme.teal,
+                  ),
                   const SizedBox(width: 4),
                   Flexible(
                     child: Text(
                       '60s atomic reservation lock will be activated',
-                      style: TextStyle(fontSize: 11, color: AppTheme.teal.withOpacity(0.9), fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.teal.withOpacity(0.9),
+                        fontWeight: FontWeight.w600,
+                      ),
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1,
                     ),
@@ -238,47 +369,20 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () {
-                    final targetSec = _sections.firstWhere((s) => s.sectionNumber == _selectedSectionNumber);
-                    if (targetSec.isFull) {
-                      MobileBottomSheets.showSectionFullFallback(
-                        context,
-                        courseCode: 'CSE 327',
-                        fullSection: targetSec.sectionNumber,
-                        onSelectAlternative: (altSec) {
-                          setState(() => _selectedSectionNumber = altSec);
-                        },
-                      );
-                      return;
-                    }
-
-                    widget.appState.addStagedCourse(
-                      StagedCourse(
-                        courseCode: targetSec.courseCode,
-                        sectionNumber: targetSec.sectionNumber,
-                        faculty: targetSec.faculty,
-                        timeSlot: targetSec.timeSlot,
-                        days: targetSec.days,
-                        room: targetSec.room,
-                        credits: 3.0,
-                      ),
+                  onPressed: () async {
+                    final targetSec = sections.firstWhere(
+                      (s) => s.sectionNumber == activeSelection,
+                      orElse: () => sections.first,
                     );
-
-                    MobileBottomSheets.showSeatApproved(
-                      context,
-                      courseCode: targetSec.courseCode,
-                      sectionNumber: targetSec.sectionNumber,
-                      onViewSchedule: () {
-                        Navigator.pop(context);
-                        widget.appState.setTab(1);
-                      },
-                    );
+                    await _stageAndHandleSection(targetSec);
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.teal,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     elevation: 0,
                   ),
                   child: const Text(
@@ -302,7 +406,9 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
           color: isPositive ? AppTheme.emeraldLight : AppTheme.canvas,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: isPositive ? AppTheme.emerald.withOpacity(0.3) : AppTheme.border,
+            color: isPositive
+                ? AppTheme.emerald.withOpacity(0.3)
+                : AppTheme.border,
           ),
         ),
         child: Column(
@@ -333,10 +439,15 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     );
   }
 
-  Widget _buildDagNode(String course, String grade, bool passed, {bool isTarget = false}) {
+  Widget _buildDagNode(
+    String course,
+    String grade,
+    bool passed, {
+    bool isTarget = false,
+  }) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
         decoration: BoxDecoration(
           color: passed
               ? AppTheme.emeraldLight
@@ -365,10 +476,14 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                         ? AppTheme.navy
                         : AppTheme.amberDark,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
             Text(
               grade,
               style: const TextStyle(fontSize: 9, color: AppTheme.textMuted),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
@@ -376,20 +491,15 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     );
   }
 
-  Widget _buildSectionCard(CourseSection sec, bool isSelected) {
+  Widget _buildSectionCard(
+    CourseSection sec,
+    bool isSelected,
+  ) {
     return InkWell(
-      onTap: () {
+      onTap: () async {
+        setState(() => _selectedSectionNumber = sec.sectionNumber);
         if (sec.isFull) {
-          MobileBottomSheets.showSectionFullFallback(
-            context,
-            courseCode: 'CSE 327',
-            fullSection: sec.sectionNumber,
-            onSelectAlternative: (altSec) {
-              setState(() => _selectedSectionNumber = altSec);
-            },
-          );
-        } else {
-          setState(() => _selectedSectionNumber = sec.sectionNumber);
+          await _stageAndHandleSection(sec);
         }
       },
       borderRadius: BorderRadius.circular(14),
@@ -405,46 +515,58 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         ),
         child: Row(
           children: [
-            // Radio Indicator
             Icon(
               isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
               color: isSelected ? AppTheme.teal : AppTheme.textMuted,
               size: 20,
             ),
             const SizedBox(width: 12),
-
-            // Details
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
-                      Text(
-                        'Sec ${sec.sectionNumber}',
-                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.navy),
+                      Flexible(
+                        child: Text(
+                          'Sec ${sec.sectionNumber}',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.navy,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                       const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: sec.isFull
-                              ? AppTheme.crimsonLight
-                              : sec.isFewSeats
-                                  ? AppTheme.amberLight
-                                  : AppTheme.emeraldLight,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          sec.badge,
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
+                      Flexible(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
                             color: sec.isFull
-                                ? AppTheme.crimson
+                                ? AppTheme.crimsonLight
                                 : sec.isFewSeats
-                                    ? AppTheme.amberDark
-                                    : AppTheme.emeraldDark,
+                                    ? AppTheme.amberLight
+                                    : AppTheme.emeraldLight,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            sec.displayBadge,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: sec.isFull
+                                  ? AppTheme.crimson
+                                  : sec.isFewSeats
+                                      ? AppTheme.amberDark
+                                      : AppTheme.emeraldDark,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ),
@@ -453,21 +575,26 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                   const SizedBox(height: 3),
                   Text(
                     sec.faculty,
-                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.textSecondary,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                   Text(
                     '${sec.days} ${sec.timeSlot} • ${sec.room}',
-                    style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppTheme.textMuted,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
             ),
-
-            // Seat counts
+            const SizedBox(width: 8),
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -482,7 +609,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                 ),
                 Text(
                   sec.isFull ? 'Waitlisted' : 'Open Seats',
-                  style: const TextStyle(fontSize: 9, color: AppTheme.textMuted),
+                  style: const TextStyle(
+                    fontSize: 9,
+                    color: AppTheme.textMuted,
+                  ),
                 ),
               ],
             ),

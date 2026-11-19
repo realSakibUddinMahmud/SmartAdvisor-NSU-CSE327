@@ -1,0 +1,18 @@
+{
+  "name": "@smartadvisor/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed --workers=1",
+    "test:desktop": "playwright test --project=desktop",
+    "test:mobile": "playwright test --project=mobile",
+    "typecheck": "tsc --noEmit",
+    "test:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@types/node": "^20.17.19",
+    "typescript": "^5.7.3"
+  }
+}

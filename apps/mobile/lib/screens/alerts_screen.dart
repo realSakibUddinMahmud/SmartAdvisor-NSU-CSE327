@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
-import '../state/app_state.dart';
 import '../models/models.dart';
+import '../state/app_state.dart';
+import '../theme/app_theme.dart';
+import '../widgets/bottom_sheets.dart';
 
 class AlertsScreen extends StatefulWidget {
   final AppState appState;
@@ -13,17 +14,45 @@ class AlertsScreen extends StatefulWidget {
 }
 
 class _AlertsScreenState extends State<AlertsScreen> {
-  String _selectedFilter = 'All 5';
+  String _selectedFilterKey = 'all';
   bool _telegramRadarActive = true;
+  bool _retrying = false;
 
   @override
   Widget build(BuildContext context) {
+    final allAlerts = widget.appState.alerts;
+    final seatsCount = allAlerts.where((a) => a.isSeatAlert).length;
+    final decisionsCount = allAlerts.where((a) => a.isDecisionAlert).length;
+
+    final filteredAlerts = allAlerts.where((alert) {
+      if (_selectedFilterKey == 'seats') return alert.isSeatAlert;
+      if (_selectedFilterKey == 'decisions') return alert.isDecisionAlert;
+      return true;
+    }).toList();
+
+    final filters = [
+      (key: 'all', label: 'All ${allAlerts.length}'),
+      (key: 'seats', label: 'Seats $seatsCount'),
+      (key: 'decisions', label: 'Decisions $decisionsCount'),
+    ];
+
+    final latencyMs = widget.appState.hasLiveMetrics
+        ? widget.appState.metrics.p95LatencyMs
+        : 12;
+    final gatewaySubtitle = widget.appState.isLiveConnected
+        ? (widget.appState.isSseFallback
+            ? 'SSE Real-Time Seat Radar Active'
+            : 'WebSocket Real-Time Seat Radar Active')
+        : (widget.appState.isOfflineMode
+            ? 'Offline Cache Mode (Tap Retry to Sync)'
+            : 'WebSocket Real-Time Seat Radar Active');
+
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Gateway Status Banner with Retry Action
+          // Gateway Status Banner with Live Retry & Bootstrap Resync
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -39,19 +68,22 @@ class _AlertsScreenState extends State<AlertsScreen> {
                       Container(
                         width: 8,
                         height: 8,
-                        decoration: const BoxDecoration(
-                          color: AppTheme.emerald,
+                        decoration: BoxDecoration(
+                          color: widget.appState.lastError != null &&
+                                  !widget.appState.isLiveConnected
+                              ? AppTheme.amber
+                              : AppTheme.emerald,
                           shape: BoxShape.circle,
                         ),
                       ),
                       const SizedBox(width: 10),
-                      const Expanded(
+                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'RDS EDGE GATEWAY (12ms)',
-                              style: TextStyle(
+                              'RDS EDGE GATEWAY (${latencyMs}ms)',
+                              style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 11,
                                 fontWeight: FontWeight.bold,
@@ -61,8 +93,11 @@ class _AlertsScreenState extends State<AlertsScreen> {
                               overflow: TextOverflow.ellipsis,
                             ),
                             Text(
-                              'WebSocket Real-Time Seat Radar Active',
-                              style: TextStyle(color: Colors.white70, fontSize: 10),
+                              gatewaySubtitle,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 10,
+                              ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -74,20 +109,37 @@ class _AlertsScreenState extends State<AlertsScreen> {
                 ),
                 const SizedBox(width: 8),
                 TextButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Re-synchronized with Redis Primary Node in 8ms.'),
-                        backgroundColor: AppTheme.navy,
-                      ),
-                    );
-                  },
+                  onPressed: _retrying
+                      ? null
+                      : () async {
+                          setState(() => _retrying = true);
+                          await widget.appState.reconnectRealtimeAndSync();
+                          if (!context.mounted) return;
+                          setState(() => _retrying = false);
+                          final live = widget.appState.isLiveConnected;
+                          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                live
+                                    ? 'Re-synchronized with live SmartAdvisor gateway.'
+                                    : 'Gateway refreshed (local cache synced).',
+                              ),
+                              backgroundColor: AppTheme.navy,
+                            ),
+                          );
+                        },
                   style: TextButton.styleFrom(
                     backgroundColor: Colors.white.withOpacity(0.12),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     minimumSize: Size.zero,
                   ),
-                  child: const Text('Retry', style: TextStyle(color: Colors.white, fontSize: 11)),
+                  child: Text(
+                    _retrying ? 'Syncing' : 'Retry',
+                    style: const TextStyle(color: Colors.white, fontSize: 11),
+                  ),
                 ),
               ],
             ),
@@ -110,12 +162,12 @@ class _AlertsScreenState extends State<AlertsScreen> {
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
-              children: ['All 5', 'Seats 3', 'Decisions 2'].map((filter) {
-                final isSelected = _selectedFilter == filter;
+              children: filters.map((f) {
+                final isSelected = _selectedFilterKey == f.key;
                 return Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: ChoiceChip(
-                    label: Text(filter),
+                    label: Text(f.label),
                     labelStyle: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
@@ -126,9 +178,12 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     backgroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
-                      side: BorderSide(color: isSelected ? AppTheme.navy : AppTheme.border),
+                      side: BorderSide(
+                        color: isSelected ? AppTheme.navy : AppTheme.border,
+                      ),
                     ),
-                    onSelected: (_) => setState(() => _selectedFilter = filter),
+                    onSelected: (_) =>
+                        setState(() => _selectedFilterKey = f.key),
                   ),
                 );
               }).toList(),
@@ -136,14 +191,25 @@ class _AlertsScreenState extends State<AlertsScreen> {
           ),
           const SizedBox(height: 14),
 
-          // Alerts List
-          ...List.generate(widget.appState.alerts.length, (index) {
-            final alert = widget.appState.alerts[index];
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _buildAlertCard(context, alert),
-            );
-          }),
+          // Filtered Alerts List
+          if (filteredAlerts.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Center(
+                child: Text(
+                  'No alerts in this category.',
+                  style: TextStyle(fontSize: 13, color: AppTheme.textMuted),
+                ),
+              ),
+            )
+          else
+            ...List.generate(filteredAlerts.length, (index) {
+              final alert = filteredAlerts[index];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _buildAlertCard(context, alert),
+              );
+            }),
 
           const SizedBox(height: 14),
 
@@ -163,21 +229,32 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     color: AppTheme.teal.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(Icons.send_rounded, color: AppTheme.teal, size: 22),
+                  child: const Icon(
+                    Icons.send_rounded,
+                    color: AppTheme.teal,
+                    size: 22,
+                  ),
                 ),
                 const SizedBox(width: 12),
-                Expanded(
+                const Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
+                      Text(
                         'Instant Telegram & SMS Radar',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.navy),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.navy,
+                        ),
                       ),
-                      const SizedBox(height: 2),
-                      const Text(
+                      SizedBox(height: 2),
+                      Text(
                         'Instant alert push when closed section drops a seat.',
-                        style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textMuted,
+                        ),
                       ),
                     ],
                   ),
@@ -198,8 +275,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
   }
 
   Widget _buildAlertCard(BuildContext context, AlertItem alert) {
-    Color badgeColor;
-    IconData icon;
+    final Color badgeColor;
+    final IconData icon;
 
     switch (alert.type) {
       case 'seat_drop':
@@ -261,26 +338,91 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     const SizedBox(width: 8),
                     Text(
                       alert.timeAgo,
-                      style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: AppTheme.textMuted,
+                      ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 4),
                 Text(
                   alert.description,
-                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.3),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textSecondary,
+                    height: 1.3,
+                  ),
                 ),
                 const SizedBox(height: 8),
-
                 Align(
                   alignment: Alignment.centerRight,
                   child: TextButton(
-                    onPressed: () {
+                    onPressed: () async {
                       final messenger = ScaffoldMessenger.maybeOf(context);
-                      if (alert.type == 'seat_drop') {
-                        widget.appState.setTab(1); // Go to schedule
+                      if (alert.eventType == NotificationEventType.rdsFallback &&
+                          widget.appState.rdsFallbackPrompt != null) {
+                        MobileBottomSheets.showRdsFallbackSheet(
+                          context,
+                          prompt: widget.appState.rdsFallbackPrompt!,
+                          appState: widget.appState,
+                        );
+                        return;
+                      }
+                      if ((alert.type == 'seat_drop' ||
+                              alert.type == 'fast_enroll') &&
+                          alert.sectionId != null) {
+                        final res = await widget.appState
+                            .stageSection(alert.sectionId!);
+                        if (!context.mounted) return;
+                        if (res.isStaged) {
+                          widget.appState.setTab(1);
+                          messenger?.showSnackBar(
+                            SnackBar(
+                              content:
+                                  Text('Action executed: ${alert.actionLabel}'),
+                              backgroundColor: AppTheme.navy,
+                            ),
+                          );
+                        } else if (res.kind == StageResultKind.sectionFull &&
+                            res.fullSection != null) {
+                          MobileBottomSheets.showSectionFullFallback(
+                            context,
+                            courseCode: res.fullSection!.courseCode,
+                            fullSection: res.fullSection!.sectionNumber,
+                            fullSectionObj: res.fullSection,
+                            alternatives: res.alternatives,
+                            appState: widget.appState,
+                          );
+                        } else if (res.kind == StageResultKind.ruleAlert &&
+                            res.section != null) {
+                          MobileBottomSheets.showMissingPrereqRule42(
+                            context,
+                            targetCourse: res.section!.courseCode,
+                            sectionId: res.section!.id,
+                            ruleCode: res.ruleCode ?? 'RULE-4.2',
+                            studentCredits: res.studentCredits,
+                            requiredCredits: res.requiredCredits,
+                            missingPrerequisites: res.missingPrerequisites,
+                            conflictingSections: res.conflictingSections,
+                            appState: widget.appState,
+                          );
+                        } else {
+                          messenger?.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                res.message ?? 'Unable to stage section.',
+                              ),
+                              backgroundColor: AppTheme.crimson,
+                            ),
+                          );
+                        }
+                        return;
+                      } else if (alert.type == 'seat_drop' ||
+                          alert.type == 'fast_enroll') {
+                        widget.appState.setTab(1);
                       } else if (alert.type == 'rule_alert') {
-                        widget.appState.setTab(2); // Go to prereqs
+                        widget.appState.setTab(2);
                       }
                       messenger?.showSnackBar(
                         SnackBar(
@@ -290,7 +432,10 @@ class _AlertsScreenState extends State<AlertsScreen> {
                       );
                     },
                     style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
                       minimumSize: Size.zero,
                       backgroundColor: badgeColor.withOpacity(0.08),
                     ),

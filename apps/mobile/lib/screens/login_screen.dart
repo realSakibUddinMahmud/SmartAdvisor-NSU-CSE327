@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
 import '../state/app_state.dart';
+import '../theme/app_theme.dart';
 
 class LoginScreen extends StatefulWidget {
   final AppState appState;
@@ -15,6 +15,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _idController = TextEditingController(text: '2412159042');
   final _passController = TextEditingController(text: '••••••••••••');
   bool _rememberMe = true;
+  bool _submitting = false;
 
   @override
   void dispose() {
@@ -23,12 +24,22 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _handleSignIn() {
-    widget.appState.login(_idController.text, _passController.text);
+  Future<void> _handleSignIn() async {
+    if (_submitting) return;
+    setState(() => _submitting = true);
+    try {
+      await widget.appState.login(_idController.text, _passController.text);
+    } finally {
+      if (mounted) {
+        setState(() => _submitting = false);
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final authError = widget.appState.authError;
+
     return Scaffold(
       backgroundColor: AppTheme.navy,
       body: SafeArea(
@@ -41,7 +52,8 @@ class _LoginScreenState extends State<LoginScreen> {
               // Institutional Logo & Gateway Live Badge
               Center(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(20),
@@ -136,7 +148,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         const SizedBox(width: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
                             color: AppTheme.emeraldLight,
                             borderRadius: BorderRadius.circular(6),
@@ -167,12 +182,22 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 6),
                     TextField(
                       controller: _idController,
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
                       decoration: InputDecoration(
                         filled: true,
                         fillColor: AppTheme.canvas,
-                        prefixIcon: const Icon(Icons.badge_outlined, size: 20, color: AppTheme.textMuted),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        prefixIcon: const Icon(
+                          Icons.badge_outlined,
+                          size: 20,
+                          color: AppTheme.textMuted,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
                           borderSide: const BorderSide(color: AppTheme.border),
@@ -203,8 +228,15 @@ class _LoginScreenState extends State<LoginScreen> {
                       decoration: InputDecoration(
                         filled: true,
                         fillColor: AppTheme.canvas,
-                        prefixIcon: const Icon(Icons.lock_outline, size: 20, color: AppTheme.textMuted),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        prefixIcon: const Icon(
+                          Icons.lock_outline,
+                          size: 20,
+                          color: AppTheme.textMuted,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
                           borderSide: const BorderSide(color: AppTheme.border),
@@ -217,6 +249,31 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 12),
 
+                    if (authError != null && authError.isNotEmpty) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppTheme.crimsonLight,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: AppTheme.crimson.withOpacity(0.3),
+                          ),
+                        ),
+                        child: Text(
+                          authError,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppTheme.crimsonDark,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+
                     // Remember Me Row
                     Row(
                       children: [
@@ -226,7 +283,8 @@ class _LoginScreenState extends State<LoginScreen> {
                           child: Checkbox(
                             value: _rememberMe,
                             activeColor: AppTheme.teal,
-                            onChanged: (v) => setState(() => _rememberMe = v ?? true),
+                            onChanged: (v) =>
+                                setState(() => _rememberMe = v ?? true),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -234,7 +292,10 @@ class _LoginScreenState extends State<LoginScreen> {
                           child: Text(
                             'Remember on this device',
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: AppTheme.textSecondary,
+                            ),
                           ),
                         ),
                       ],
@@ -243,7 +304,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                     // Sign In Button
                     ElevatedButton(
-                      onPressed: _handleSignIn,
+                      onPressed: _submitting ? null : _handleSignIn,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppTheme.navy,
                         foregroundColor: Colors.white,
@@ -253,12 +314,15 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         elevation: 0,
                       ),
-                      child: const Row(
+                      child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Text(
-                            'Sign in →',
-                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                            _submitting ? 'Signing in...' : 'Sign in →',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ],
                       ),
@@ -268,7 +332,6 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
 
               const SizedBox(height: 24),
-              // Security note
               const Center(
                 child: Text(
                   '256-bit SSL • Official NSU Cloud Infrastructure',

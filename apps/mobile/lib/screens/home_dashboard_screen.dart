@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
-import '../state/app_state.dart';
 import '../models/models.dart';
-import '../widgets/priority_window_card.dart';
+import '../state/app_state.dart';
+import '../theme/app_theme.dart';
+import '../widgets/bottom_sheets.dart';
 import '../widgets/credit_ring_widget.dart';
+import '../widgets/priority_window_card.dart';
 import 'course_catalog_screen.dart';
 
 class HomeDashboardScreen extends StatelessWidget {
@@ -13,6 +14,15 @@ class HomeDashboardScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isCleared = appState.student.advisingClearedBy.trim().isNotEmpty;
+    final openQuickAddSections = appState.sections
+        .where((s) => !s.isFull && s.minCreditsRequired == null)
+        .take(2)
+        .toList();
+    final fallbackPrompt = appState.rdsFallbackPrompt;
+    final hasActiveFallback =
+        fallbackPrompt != null && !fallbackPrompt.resolved;
+
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
       child: Column(
@@ -53,22 +63,36 @@ class HomeDashboardScreen extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: AppTheme.emeraldLight,
+                  color: isCleared
+                      ? AppTheme.emeraldLight
+                      : AppTheme.amberLight,
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: AppTheme.emerald.withOpacity(0.3)),
+                  border: Border.all(
+                    color: (isCleared ? AppTheme.emerald : AppTheme.amber)
+                        .withOpacity(0.3),
+                  ),
                 ),
-                child: const Row(
+                child: Row(
                   children: [
-                    Icon(Icons.check_circle, color: AppTheme.emerald, size: 14),
-                    SizedBox(width: 4),
+                    Icon(
+                      isCleared
+                          ? Icons.check_circle
+                          : Icons.hourglass_top_rounded,
+                      color: isCleared ? AppTheme.emerald : AppTheme.amber,
+                      size: 14,
+                    ),
+                    const SizedBox(width: 4),
                     Text(
-                      'Cleared',
+                      isCleared ? 'Cleared' : 'Pending',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
-                        color: AppTheme.emeraldDark,
+                        color: isCleared
+                            ? AppTheme.emeraldDark
+                            : AppTheme.amberDark,
                       ),
                     ),
                   ],
@@ -78,14 +102,84 @@ class HomeDashboardScreen extends StatelessWidget {
           ),
           const SizedBox(height: 18),
 
+          if (hasActiveFallback) ...[
+            InkWell(
+              onTap: () {
+                MobileBottomSheets.showRdsFallbackSheet(
+                  context,
+                  prompt: fallbackPrompt,
+                  appState: appState,
+                );
+              },
+              borderRadius: BorderRadius.circular(14),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppTheme.crimsonLight,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: AppTheme.crimson.withOpacity(0.35),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.warning_rounded,
+                      color: AppTheme.crimson,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'RDS Fallback Needed: ${fallbackPrompt.failedCourseCode}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.crimsonDark,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const Text(
+                            'Tap for 1-click DAG-verified alternative swap',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: AppTheme.textSecondary,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(
+                      Icons.arrow_forward_ios_rounded,
+                      size: 14,
+                      color: AppTheme.crimson,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
+
           // 1. Dark-Navy Priority Window Countdown Card
-          const PriorityWindowCard(),
+          PriorityWindowCard(
+            slotClosesAt: appState.slotClosesAt,
+            stagedCount: appState.stagedCourses.length,
+          ),
           const SizedBox(height: 14),
 
           // 2. Credit Summary Circular Ring Card
           CreditSummaryRing(
             currentCredits: appState.totalCredits,
-            maxCredits: 15.0,
+            maxCredits: appState.maxCredits,
+            clashCount: appState.clashes.length,
           ),
           const SizedBox(height: 22),
 
@@ -107,12 +201,12 @@ class HomeDashboardScreen extends StatelessWidget {
             physics: const NeverScrollableScrollPhysics(),
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
-            childAspectRatio: 1.45,
+            childAspectRatio: 1.32,
             children: [
               _buildActionTile(
                 icon: Icons.search_rounded,
                 title: 'Courses',
-                subtitle: 'Catalog & Radar',
+                subtitle: 'Catalog (${appState.catalogCourses.length} Courses)',
                 color: AppTheme.teal,
                 onTap: () {
                   Navigator.push(
@@ -175,9 +269,9 @@ class HomeDashboardScreen extends StatelessWidget {
                     ),
                   );
                 },
-                child: const Text(
-                  'View All (48) →',
-                  style: TextStyle(
+                child: Text(
+                  'View All (${appState.sections.length}) →',
+                  style: const TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.bold,
                     color: AppTheme.teal,
@@ -188,68 +282,60 @@ class HomeDashboardScreen extends StatelessWidget {
           ),
           const SizedBox(height: 10),
 
-          // Quick Add Card 1: CSE 327 Sec 01
-          _buildQuickAddCard(
-            context,
-            code: 'CSE 327',
-            section: '01',
-            faculty: 'Dr. Nabeel Mohammed',
-            time: 'ST 11:20 AM - 12:50 PM • SAC 502',
-            seatsAvailable: 12,
-            isStaged: appState.stagedCourses.any((c) => c.courseCode == 'CSE 327'),
-            onQuickAdd: () {
-              final messenger = ScaffoldMessenger.maybeOf(context);
-              appState.addStagedCourse(
-                const StagedCourse(
-                  courseCode: 'CSE 327',
-                  sectionNumber: '01',
-                  faculty: 'Dr. Nabeel Mohammed',
-                  days: 'ST',
-                  timeSlot: '11:20 AM - 12:50 PM',
-                  room: 'SAC 502',
-                  credits: 3.0,
-                ),
-              );
-              messenger?.showSnackBar(
-                const SnackBar(
-                  content: Text('CSE 327 Sec 01 staged in advising cart!'),
-                  backgroundColor: AppTheme.emeraldDark,
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 10),
-
-          // Quick Add Card 2: MAT 361 Sec 04
-          _buildQuickAddCard(
-            context,
-            code: 'MAT 361',
-            section: '04',
-            faculty: 'Dr. Hasina Akter',
-            time: 'ST 01:20 PM - 02:50 PM • NAC 510',
-            seatsAvailable: 22,
-            isStaged: appState.stagedCourses.any((c) => c.courseCode == 'MAT 361'),
-            onQuickAdd: () {
-              final messenger = ScaffoldMessenger.maybeOf(context);
-              appState.addStagedCourse(
-                const StagedCourse(
-                  courseCode: 'MAT 361',
-                  sectionNumber: '04',
-                  faculty: 'Dr. Hasina Akter',
-                  days: 'ST',
-                  timeSlot: '01:20 PM - 02:50 PM',
-                  room: 'NAC 510',
-                  credits: 3.0,
-                ),
-              );
-              messenger?.showSnackBar(
-                const SnackBar(
-                  content: Text('MAT 361 Sec 04 staged in advising cart!'),
-                  backgroundColor: AppTheme.emeraldDark,
-                ),
-              );
-            },
-          ),
+          ...openQuickAddSections.map((sec) {
+            final isStaged = appState.stagedSectionIds.contains(sec.id);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _buildQuickAddCard(
+                context,
+                section: sec,
+                isStaged: isStaged,
+                onQuickAdd: () async {
+                  final messenger = ScaffoldMessenger.maybeOf(context);
+                  final res = await appState.stageSection(sec.id);
+                  if (!context.mounted) return;
+                  if (res.isStaged) {
+                    messenger?.showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          '${sec.courseCode} Sec ${sec.sectionNumber} staged in advising cart!',
+                        ),
+                        backgroundColor: AppTheme.emeraldDark,
+                      ),
+                    );
+                  } else if (res.kind == StageResultKind.ruleAlert) {
+                    MobileBottomSheets.showMissingPrereqRule42(
+                      context,
+                      targetCourse: sec.courseCode,
+                      sectionId: sec.id,
+                      ruleCode: res.ruleCode ?? 'RULE-4.2',
+                      studentCredits: res.studentCredits,
+                      requiredCredits: res.requiredCredits,
+                      missingPrerequisites: res.missingPrerequisites,
+                      conflictingSections: res.conflictingSections,
+                      appState: appState,
+                    );
+                  } else if (res.kind == StageResultKind.sectionFull) {
+                    MobileBottomSheets.showSectionFullFallback(
+                      context,
+                      courseCode: sec.courseCode,
+                      fullSection: sec.sectionNumber,
+                      fullSectionObj: res.fullSection ?? sec,
+                      alternatives: res.alternatives,
+                      appState: appState,
+                    );
+                  } else if (res.message != null) {
+                    messenger?.showSnackBar(
+                      SnackBar(
+                        content: Text(res.message!),
+                        backgroundColor: AppTheme.crimson,
+                      ),
+                    );
+                  }
+                },
+              ),
+            );
+          }),
         ],
       ),
     );
@@ -314,11 +400,7 @@ class HomeDashboardScreen extends StatelessWidget {
 
   Widget _buildQuickAddCard(
     BuildContext context, {
-    required String code,
-    required String section,
-    required String faculty,
-    required String time,
-    required int seatsAvailable,
+    required CourseSection section,
     required bool isStaged,
     required VoidCallback onQuickAdd,
   }) {
@@ -340,7 +422,7 @@ class HomeDashboardScreen extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        '$code Sec $section',
+                        '${section.courseCode} Sec ${section.sectionNumber}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -352,13 +434,16 @@ class HomeDashboardScreen extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: AppTheme.emeraldLight,
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
-                        '$seatsAvailable Open',
+                        '${section.availableSeats} Open',
                         style: const TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
@@ -370,20 +455,27 @@ class HomeDashboardScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  faculty,
+                  section.faculty,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppTheme.textSecondary,
+                  ),
                 ),
                 Text(
-                  time,
+                  '${section.days} ${section.timeSlot} • ${section.room}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: AppTheme.textMuted,
+                  ),
                 ),
               ],
             ),
           ),
+          const SizedBox(width: 8),
           ElevatedButton(
             onPressed: isStaged ? null : onQuickAdd,
             style: ElevatedButton.styleFrom(
@@ -391,7 +483,9 @@ class HomeDashboardScreen extends StatelessWidget {
               foregroundColor: isStaged ? AppTheme.textMuted : Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
             child: Text(
               isStaged ? 'Staged ✓' : 'Quick Add',
