@@ -149,11 +149,22 @@ export async function getBootstrap(
   request: APIRequestContext,
   token?: string
 ): Promise<Record<string, any>> {
-  const res = await request.get(`${API_BASE}/bootstrap`, {
-    headers: token ? authHeaders(token) : undefined,
-  });
-  expect(res.status(), `GET ${API_BASE}/bootstrap failed`).toBe(200);
-  return await res.json();
+  const headers: Record<string, string> = {
+    ...(token ? authHeaders(token) : {}),
+    Connection: 'close',
+  };
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await request.get(`${API_BASE}/bootstrap`, { headers });
+      expect(res.status(), `GET ${API_BASE}/bootstrap failed`).toBe(200);
+      return await res.json();
+    } catch (err) {
+      lastError = err;
+      if (attempt === 1) throw err;
+    }
+  }
+  throw lastError;
 }
 
 export async function gotoAndWaitHydration(
@@ -520,19 +531,33 @@ export async function expectLiveSyncText(
   if (options.streamPage) {
     const matchSource = options.streamMatch?.source ?? 'SYNC_UPDATE|RDS_FALLBACK|NOTIFICATION';
     const matchFlags = options.streamMatch?.flags ?? 'i';
-    const frames = await options.streamPage.evaluate(
-      ({ minTs, source, flags }) => {
-        const re = new RegExp(source, flags);
-        const w = window as unknown as {
-          __e2eSseEvents?: StreamEventRecord[];
-          __e2eWsEvents?: StreamEventRecord[];
-        };
-        const pick = (arr?: StreamEventRecord[]) =>
-          (arr ?? []).find((e) => e.receivedAt >= minTs - 50 && re.test(e.raw));
-        return { sse: pick(w.__e2eSseEvents), ws: pick(w.__e2eWsEvents) };
-      },
-      { minTs: options.startedAt, source: matchSource, flags: matchFlags }
-    );
+    const readFrames = () =>
+      options.streamPage!.evaluate(
+        ({ minTs, source, flags }) => {
+          const re = new RegExp(source, flags);
+          const w = window as unknown as {
+            __e2eSseEvents?: StreamEventRecord[];
+            __e2eWsEvents?: StreamEventRecord[];
+          };
+          const pick = (arr?: StreamEventRecord[]) =>
+            (arr ?? []).find((e) => e.receivedAt >= minTs - 50 && re.test(e.raw));
+          return { sse: pick(w.__e2eSseEvents), ws: pick(w.__e2eWsEvents) };
+        },
+        { minTs: options.startedAt, source: matchSource, flags: matchFlags }
+      );
+
+    await expect
+      .poll(
+        async () => {
+          const f = await readFrames();
+          return Boolean(f.sse && f.ws);
+        },
+        { timeout: slaMs, intervals: [15, 25, 50] }
+      )
+      .toBe(true)
+      .catch(() => undefined);
+
+    const frames = await readFrames();
 
     expect(frames.sse, 'Expected matching SSE frame for live sync').toBeDefined();
     expect(frames.ws, 'Expected matching WebSocket frame for live sync').toBeDefined();

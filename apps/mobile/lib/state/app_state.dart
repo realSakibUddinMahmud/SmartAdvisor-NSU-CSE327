@@ -50,6 +50,10 @@ class AppState extends ChangeNotifier {
   final List<AlertItem> _offlineAlerts =
       List<AlertItem>.from(_seedOfflineAlerts);
 
+  static final bool _isFlutterTestEnv =
+      const bool.fromEnvironment('FLUTTER_TEST') ||
+          Platform.environment['FLUTTER_TEST'] == 'true';
+
   AppState({
     SmartAdvisorApiClient? apiClient,
     bool? enableRealtime,
@@ -60,10 +64,8 @@ class AppState extends ChangeNotifier {
   })  : _isLoggedIn = initialLoggedIn,
         _currentTab = initialTab,
         _isMilestoneFirst = isMilestoneFirst,
-        _useNetwork =
-            apiClient != null || Platform.environment['FLUTTER_TEST'] != 'true',
-        _enableRealtime = enableRealtime ??
-            (Platform.environment['FLUTTER_TEST'] != 'true'),
+        _useNetwork = apiClient != null || !_isFlutterTestEnv,
+        _enableRealtime = enableRealtime ?? !_isFlutterTestEnv,
         _apiClient = apiClient ?? SmartAdvisorApiClient() {
     if (initialState != null) {
       _applyBackendState(initialState);

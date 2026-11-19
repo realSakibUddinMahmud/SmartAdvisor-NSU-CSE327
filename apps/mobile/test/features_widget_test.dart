@@ -723,7 +723,7 @@ void main() {
     addTearDown(fallbackAppState.dispose);
 
     await tester.pumpWidget(SmartAdvisorApp(appState: fallbackAppState));
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
     expect(
       find.text('RDS Fallback ready for CSE 327. Tap to switch.'),
       findsOneWidget,
@@ -880,11 +880,16 @@ void main() {
     addTearDown(seedAlertsState.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: AlertsScreen(appState: seedAlertsState))),
+      MaterialApp(
+        key: const ValueKey('alerts-step'),
+        home: Scaffold(body: AlertsScreen(appState: seedAlertsState)),
+      ),
     );
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Retry'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Retry'));
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
     expect(
       find.text('Gateway refreshed (local cache synced).'),
       findsOneWidget,

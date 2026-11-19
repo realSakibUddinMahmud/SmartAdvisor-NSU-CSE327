@@ -18,7 +18,7 @@ class SmartAdvisorMobileApp extends StatefulWidget {
 }
 
 class _SmartAdvisorMobileAppState extends State<SmartAdvisorMobileApp> {
-  late final AppState _appState;
+  late AppState _appState;
   bool _isLocalState = false;
 
   @override
@@ -31,6 +31,25 @@ class _SmartAdvisorMobileAppState extends State<SmartAdvisorMobileApp> {
       _isLocalState = true;
     }
     _appState.addListener(_onStateChange);
+  }
+
+  @override
+  void didUpdateWidget(covariant SmartAdvisorMobileApp oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.appState != widget.appState) {
+      _appState.removeListener(_onStateChange);
+      if (_isLocalState) {
+        _appState.dispose();
+      }
+      if (widget.appState != null) {
+        _appState = widget.appState!;
+        _isLocalState = false;
+      } else {
+        _appState = AppState();
+        _isLocalState = true;
+      }
+      _appState.addListener(_onStateChange);
+    }
   }
 
   @override
