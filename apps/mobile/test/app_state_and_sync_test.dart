@@ -696,6 +696,7 @@ void main() {
           return;
         }
         if (req.uri.path == '/api/v1/events') {
+          req.response.bufferOutput = false;
           req.response.statusCode = 200;
           req.response.headers.set('content-type', 'text/event-stream');
           req.response.write(': connected\n\n');
@@ -720,7 +721,9 @@ void main() {
       addTearDown(sub.cancel);
 
       await client.connectRealtime(studentId: '2412159042');
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      for (var i = 0; i < 30 && received.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
 
       expect(client.isConnected, isTrue);
       expect(client.isSseFallback, isTrue);

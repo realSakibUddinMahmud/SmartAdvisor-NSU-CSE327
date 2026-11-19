@@ -18,7 +18,29 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _submitting = false;
 
   @override
+  void initState() {
+    super.initState();
+    widget.appState.addListener(_onAppStateChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant LoginScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.appState != widget.appState) {
+      oldWidget.appState.removeListener(_onAppStateChanged);
+      widget.appState.addListener(_onAppStateChanged);
+    }
+  }
+
+  void _onAppStateChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
   void dispose() {
+    widget.appState.removeListener(_onAppStateChanged);
     _idController.dispose();
     _passController.dispose();
     super.dispose();

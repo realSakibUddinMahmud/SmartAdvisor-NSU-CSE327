@@ -200,11 +200,14 @@ void main() {
     );
     await tester.pump();
     await tester.tap(find.text('Open RDS Fallback'));
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
 
     expect(find.text('1-Click RDS Fallback Recovery'), findsOneWidget);
-    await tester.tap(find.textContaining('Sec 04').first);
-    await tester.pump(const Duration(milliseconds: 400));
+    final sec04Finder = find.textContaining('Sec 04').first;
+    await tester.ensureVisible(sec04Finder);
+    await tester.pumpAndSettle();
+    await tester.tap(sec04Finder);
+    await tester.pumpAndSettle();
 
     expect(find.text('Seat Reservation Confirmed'), findsOneWidget);
     expect(find.textContaining('#RDS-TXN-'), findsOneWidget);
@@ -239,16 +242,18 @@ void main() {
 
     // Navigate to Prereqs tab and submit a new petition
     appState.setTab(2);
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('New'));
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
 
     await tester.enterText(
       find.byType(TextField),
       'Need CSE 425 for Fall graduation track.',
     );
+    await tester.ensureVisible(find.text('Submit Petition →'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Submit Petition →'));
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
 
     expect(find.text('Pending 2'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -649,17 +654,20 @@ void main() {
     await tester.tap(find.text('Quick Add').first);
     await tester.pump(const Duration(milliseconds: 300));
     expect(appState.stagedSectionIds, contains('CSE327-02'));
+    ScaffoldMessenger.of(tester.element(find.byType(Scaffold).first))
+        .clearSnackBars();
+    await tester.pumpAndSettle();
 
     // 2. ScheduleBuilderScreen: unstage 'x' on last card (CSE327-02) restoring 0 clashes
     appState.setTab(1);
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Swap Sec').first);
     await tester.pump();
     final countBefore = appState.stagedSectionIds.length;
     await tester.ensureVisible(find.byIcon(Icons.close).last);
     await tester.pump();
     await tester.tap(find.byIcon(Icons.close).last);
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
     expect(appState.stagedSectionIds.length, countBefore - 1);
     expect(appState.clashes, isEmpty);
 
@@ -667,24 +675,24 @@ void main() {
     await tester.ensureVisible(find.text('Swap Sec').first);
     await tester.pump();
     await tester.tap(find.text('Swap Sec').first);
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
     expect(
       find.text('RECOMMENDED ALTERNATIVES (INSTANT 1-TAP SWAP)'),
       findsOneWidget,
     );
     Navigator.of(tester.element(find.text('RECOMMENDED ALTERNATIVES (INSTANT 1-TAP SWAP)')))
         .pop();
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
 
     // 4. Tap Confirm (...) Finalize -> opens receipt sheet
     await tester.ensureVisible(find.textContaining('Finalize →'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     await tester.tap(find.textContaining('Finalize →'));
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
     expect(find.text('Seat Reservation Confirmed'), findsOneWidget);
     expect(find.textContaining('#RDS-TXN-'), findsOneWidget);
     Navigator.of(tester.element(find.text('Seat Reservation Confirmed'))).pop();
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
 
     // 5. Inline RDS Fallback banner in ScheduleBuilderScreen opens RDS fallback sheet
     final fallbackAppState = AppState(
@@ -721,7 +729,7 @@ void main() {
       findsOneWidget,
     );
     await tester.tap(find.text('Resolve →'));
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
     expect(find.text('1-Click RDS Fallback Recovery'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -768,14 +776,14 @@ void main() {
       await tester.ensureVisible(find.text('Sign in →'));
       await tester.pump();
       await tester.tap(find.text('Sign in →'));
-      await tester.runAsync(() async {
-        final deadline = DateTime.now().add(const Duration(seconds: 2));
-        while ((loginState.authError == null || loginState.isLoading) &&
-            DateTime.now().isBefore(deadline)) {
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-      });
+      for (var i = 0;
+          i < 50 && (loginState.authError == null || loginState.isLoading);
+          i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
       await tester.pumpAndSettle();
       expect(find.text('Invalid NSU ID or password'), findsOneWidget);
     } finally {
@@ -827,12 +835,14 @@ void main() {
       ),
     );
     await tester.tap(find.text('Open Full Sheet'));
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byType(Switch));
+    await tester.pumpAndSettle();
     await tester.tap(find.byType(Switch));
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
     expect(offlineState.waitlistSectionIds, contains('CSE327-03'));
     Navigator.of(tester.element(find.text('CAPACITY REACHED (40/40)'))).pop();
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
 
     // 3. showSubmitPetitionSheet <5 char validation error
     await tester.pumpWidget(
@@ -855,13 +865,15 @@ void main() {
       ),
     );
     await tester.tap(find.text('Open Petition Sheet'));
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'abc');
+    await tester.ensureVisible(find.text('Submit Petition →'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Submit Petition →'));
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
     expect(find.text('Please enter at least 5 characters.'), findsOneWidget);
     Navigator.of(tester.element(find.text('Submit Petition →'))).pop();
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
 
     // 4. AlertsScreen Retry & action tap (use seed alerts)
     final seedAlertsState = AppState(initialLoggedIn: true, initialTab: 3);
@@ -877,11 +889,14 @@ void main() {
       find.text('Gateway refreshed (local cache synced).'),
       findsOneWidget,
     );
+    ScaffoldMessenger.of(tester.element(find.byType(Scaffold).first))
+        .clearSnackBars();
+    await tester.pumpAndSettle();
 
     await tester.ensureVisible(find.text('Waitlist Hub'));
     await tester.pump();
     await tester.tap(find.text('Waitlist Hub'));
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
     expect(seedAlertsState.currentTab, 2);
     expect(tester.takeException(), isNull);
   });

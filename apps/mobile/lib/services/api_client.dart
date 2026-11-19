@@ -613,6 +613,8 @@ class SmartAdvisorApiClient {
 
       final req = await client.getUrl(buildSseUri()).timeout(requestTimeout);
       req.headers.set(HttpHeaders.acceptHeader, 'text/event-stream');
+      req.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+      req.headers.set(HttpHeaders.cacheControlHeader, 'no-cache');
       if (_authToken != null && _authToken!.isNotEmpty) {
         req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_authToken');
       }
@@ -640,25 +642,27 @@ class SmartAdvisorApiClient {
       }
       _hasConnectedOnce = true;
 
-      final dataBuffer = <String>[];
-      _sseSub = response
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen(
-        (line) {
+      var carry = '';
+      _sseSub = response.transform(utf8.decoder).listen(
+        (chunk) {
           if (_disposed) return;
-          if (line.startsWith(':')) {
-            return;
-          }
-          if (line.isEmpty) {
-            if (dataBuffer.isNotEmpty) {
-              _handleRealtimePayload(dataBuffer.join('\n'));
-              dataBuffer.clear();
+          carry += chunk.replaceAll('\r\n', '\n');
+          int boundary;
+          while ((boundary = carry.indexOf('\n\n')) != -1) {
+            final rawBlock = carry.substring(0, boundary);
+            carry = carry.substring(boundary + 2);
+            final dataLines = <String>[];
+            for (final line in rawBlock.split('\n')) {
+              if (line.startsWith(':')) {
+                continue;
+              }
+              if (line.startsWith('data:')) {
+                dataLines.add(line.substring(5).trimLeft());
+              }
             }
-            return;
-          }
-          if (line.startsWith('data:')) {
-            dataBuffer.add(line.substring(5).trimLeft());
+            if (dataLines.isNotEmpty) {
+              _handleRealtimePayload(dataLines.join('\n'));
+            }
           }
         },
         onError: (_) {
